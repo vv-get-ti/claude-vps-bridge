@@ -6,5 +6,5 @@
 - 核心桥接不依赖任何特定可选 MCP。新增工具应在接入模块维护权限与生命周期。
 - 任何发布前运行 `python scripts/check.py`、`python scripts/check-public.py --staged` 并审阅 staged diff。
 - 不能将源码或隔离测试通过写成当前桌面已激活；不能声称任意宿主版本或所有原生 Claude 配置兼容。
-- 在 VPS 上执行维护命令时，把脚本经标准输入交给 `ssh <host> bash -s`（先去掉 CR），不要在一行里嵌套多层引号。
+- 在 VPS 上执行维护命令时，把脚本写在单引号 here-string 里，经标准输入交给 `` ssh <host> "tr -d '\r' | bash -s" ``（PowerShell 管道会补 CRLF，必须在远端去掉），不要在一行里嵌套多层引号。
 - 提交使用不泄露私人邮箱的作者标识；发布范围以用户当前授权为准。

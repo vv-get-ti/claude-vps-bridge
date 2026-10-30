@@ -48,7 +48,7 @@ Bash is only a transport. Send one command with one single-quoted JSON object:
 - In a double-quoted string, write `${name}:` when a colon follows a variable; `"$name:"` is a parse error.
 - Quote Git revisions that contain braces, e.g. `git rev-parse "main^{tree}"`; bare `{...}` is a script block.
 - `$LASTEXITCODE` only reflects the last native program; check it right after each one, and keep `$ErrorActionPreference = "Stop"` for cmdlets.
-- To run a script on another machine over SSH, pipe it on stdin (`` ($s -replace "`r","") | ssh host "bash -s" ``) instead of nesting quotes in one line.
+- To run a script on another machine over SSH, put it in a single-quoted here-string and pipe it on stdin, stripping CR on the remote side: `` $s | ssh host "tr -d '\r' | bash -s" ``. PowerShell appends CRLF when piping to a native program, so removing CR locally is not enough.
 
 ## MCP
 `tavily` searches the web directly. `playwright` drives a separate Chrome on Windows: its localhost is Windows, it has none of the user's logins, and its files are under `.claude-vps/browser`. Close the browser when done. If one MCP server fails, report that server's error only.
