@@ -1,3 +1,4 @@
+import {replaceFile} from './atomic-file.mjs';
 // Windows SSH sessions can terminate their descendant processes when they end.
 // This small local broker is launched by the desktop plugin, outside SSH. It
 // only starts validated, persisted workspace jobs; it is not a second agent.
@@ -68,7 +69,7 @@ async function serve(){
   });
   await new Promise((resolve,reject)=>{server.once('error',reject);server.listen(pipe,resolve);});
   await fs.mkdir(path.dirname(descriptor),{recursive:true});
-  const temp=descriptor+'.'+process.pid+'.tmp';await fs.writeFile(temp,JSON.stringify({pipe,token,pid:process.pid,protocol,build}));await fs.rename(temp,descriptor);
+  const temp=descriptor+'.'+process.pid+'.tmp';await fs.writeFile(temp,JSON.stringify({pipe,token,pid:process.pid,protocol,build}));await replaceFile(temp,descriptor);
   const idle=setInterval(()=>{if(jobs.size===0&&Date.now()-lastActivity>15*60*1000){clearInterval(idle);server.close();}},30000);idle.unref();
 }
 if(process.argv[1]&&path.resolve(process.argv[1])===fileURLToPath(import.meta.url)){

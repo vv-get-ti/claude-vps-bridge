@@ -31,6 +31,9 @@ export function createHarnessAdapter(context) {
   const toolActions=new Set(['status','info','capability','context','read','list','search','write','edit','artifact','run','job','jobs','agent','media-export','batch','isolation']);
   const timing=value=>{try{context.onBridgeTiming?.(value);}catch{}};
   // Transient reconnects stay silent; only an unavailable bridge is reported.
+  // Contract: adapter and session methods settle with a result or fallback and
+  // never reject on transport loss. The Host does not await every call, and an
+  // unhandled rejection terminates the whole Host Runtime.
   function observeOutput(sessionId,output){
     const binding=localBindings.get(sessionId),event=output?.kind==='event'?output.event:null;
     if(!binding||!event)return;
@@ -163,11 +166,11 @@ export function createHarnessAdapter(context) {
             async list(){try{await ensureSession();return await rpc('commands-list',{sessionId});}catch(e){return errorResult(e.message);}},
             async execute(command){try{if(binding.faulted)throw new Error(binding.faulted);await ensureSession();return await rpc('commands-execute',{sessionId,command});}catch(e){return errorResult(e.message);}}
           },
-          async readCapabilities(){await ensureSession();binding.capabilities=await rpc('capabilities',{sessionId});return binding.capabilities;},
+          async readCapabilities(){try{await ensureSession();binding.capabilities=await rpc('capabilities',{sessionId});}catch(e){timing({phase:'capabilities',status:'unavailable',message:e.message});}return binding.capabilities??metadata.capabilities;},
           async execute(command){let submitting=false;try{if(binding.faulted&&command.type!=='turn.cancel')throw new Error(binding.faulted);if(['turn.start','turn.steer'].includes(command.type)){command={...command,input:await decodeHostInput(command.input)};await preflight.health();}if(command.type==='turn.steer'&&binding.activeTurn!==command.turnId)throw Error('追加指令目标不是当前活动轮次；未提交。');await ensureSession();binding.submitting=(binding.submitting??0)+1;submitting=true;return await rpc('execute',{sessionId,command,...(['turn.start','turn.steer'].includes(command.type)?{attachments:referencedMedia(command.input)}:{})},['turn.start','turn.steer'].includes(command.type)?180000:60000);}catch(e){return {...errorResult(e.message),error:{...errorResult(e.message).error,retryable:false}};}finally{if(submitting)binding.submitting=Math.max(0,(binding.submitting??0)-1);}},
           async readSnapshot(){try{await ensureSession();return await readSnapshot();}catch(e){if(e.code==='IDLE_RESTORE'){try{await ensureSession();return await readSnapshot();}catch(error){return errorResult(error.message);}}return errorResult(e.message);}},
-          async refreshUsage(){await ensureSession();await rpc('usage',{sessionId});},
-          async close(){binding.closing=true;try{const closed=await rpc('close',{sessionId},15000);if(closed===null||closed?.closed===true){closeMcpSession(sessionId);localBindings.delete(sessionId);}}finally{channel.end();channels.delete(sessionId);}},
+          async refreshUsage(){try{await ensureSession();await rpc('usage',{sessionId});}catch(e){timing({phase:'usage',status:'unavailable',message:e.message});}},
+          async close(){binding.closing=true;try{const closed=await rpc('close',{sessionId},15000);if(closed===null||closed?.closed===true){closeMcpSession(sessionId);localBindings.delete(sessionId);}}catch(e){timing({phase:'session-cleanup',status:'unconfirmed',message:e.message});}finally{channel.end();channels.delete(sessionId);}},
         };
         return {ok:true,value:session};
       }catch(e){

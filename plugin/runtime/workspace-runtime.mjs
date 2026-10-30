@@ -18,6 +18,7 @@ import {workspaceIsolation} from './workspace-isolation.mjs';
 import {coordinatedAgent,writerScope} from './agent-coordination.mjs';
 import {spawnOwnedProcess,stopProcessTree} from './process-tree.mjs';
 import {boundedRead} from './bounded-file.mjs';
+import {replaceFile} from './atomic-file.mjs';
 import {projectEnvironment,environmentContext,applicableRules,capability,permissionDecision,operation,runHooks,inside} from './project-environment.mjs';
 import {exportMedia} from './media-input.mjs';
 import {mcpRequest} from './mcp-runtime.mjs';
@@ -29,13 +30,21 @@ const hash = value => createHash('sha256').update(value).digest('hex');
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 export function fail(code, message) { throw Object.assign(new Error(message), { code }); }
 async function json(file) { return JSON.parse(await fs.readFile(file, 'utf8')); }
+// Writes to one file run in call order; a retried replacement must never let
+// an older status land after a newer one.
+const writeChains = new Map();
 async function atomic(file, value) {
-  await fs.mkdir(path.dirname(file), { recursive: true });
-  const temp = file + '.' + randomUUID() + '.tmp';
-  await fs.writeFile(temp, JSON.stringify(value, null, 2));
-  await fs.rename(temp, file);
+  const write = async () => {
+    await fs.mkdir(path.dirname(file), { recursive: true });
+    const temp = file + '.' + randomUUID() + '.tmp';
+    await fs.writeFile(temp, JSON.stringify(value, null, 2));
+    await replaceFile(temp, file);
+  };
+  const next = (writeChains.get(file) ?? Promise.resolve()).catch(() => {}).then(write);
+  writeChains.set(file, next);
+  try { await next; } finally { if (writeChains.get(file) === next) writeChains.delete(file); }
 }
-function safeId(value) { if (typeof value !== 'string' || !/^[a-zA-Z0-9_-]{1,100}$/.test(value)) fail('INVALID_ID', 'Expected a stable request/session identifier'); return value; }
+function safeId(value) { if (typeof value !== 'string' || !/^[a-zA-Z0-9_-]{1,100}$/.test(value)) fail('INVALID_ID', 'Identifiers may contain only letters, digits, - and _ (1-100 characters)'); return value; }
 export async function projectInfo(cwd) {
   if (!path.win32.isAbsolute(cwd)) fail('INVALID_PROJECT', 'Select an absolute Windows project directory');
   const real = await fs.realpath(cwd).catch(() => fail('PROJECT_MISSING', 'The selected Windows project does not exist'));
@@ -143,7 +152,7 @@ async function saveFile(info, ctx, request) {
     await fs.writeFile(temp, content);
     const current = await boundedRead(target,2*1024*1024).catch(e => e.code === 'ENOENT' ? null : Promise.reject(e));
     if ((current === null ? 'absent' : hash(current)) !== expected) { await fs.unlink(temp); fail('FILE_CHANGED', 'File changed during the write'); }
-    await fs.rename(temp, target);
+    await replaceFile(temp, target);
     const change = { path: target, kind: before === null ? 'add' : 'update', unifiedDiff: wholeDiff(path.relative(info.cwd,target), before, content) };
     // The id lets the VPS show this card immediately and skip it at turn end.
     const changeId = randomUUID();

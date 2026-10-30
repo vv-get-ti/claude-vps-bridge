@@ -18,7 +18,7 @@ export class SshTransport{
       catch(e){error=e;if(e.fatal)break;if(attempt<3)await new Promise(r=>setTimeout(r,250*(attempt+1)));}
     }
     this.onState?.({state:'unavailable',message:error?.message});
-    for(const [id,p] of this.pending){this.forget(id);p.reject(transportError(error?.code??'TRANSPORT_UNAVAILABLE','Transport unavailable; outcome unknown, no new request was submitted. '+error?.message));}
+    for(const [id,p] of this.pending){this.forget(id);p.reject(transportError(error?.code??'TRANSPORT_UNAVAILABLE','Transport unavailable during '+p.frame.method+'; outcome unknown, no new request was submitted. '+error?.message));}
     throw error??new Error('Transport closed');
   }
   start(){return new Promise((resolve,reject)=>{
