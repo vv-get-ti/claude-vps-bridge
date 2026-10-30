@@ -2,7 +2,7 @@
   "manifestVersion": 1,
   "id": "claude-vps",
   "name": "Claude VPS Bridge",
-  "version": "0.13.5",
+  "version": "0.13.6",
   "adapterApiVersion": 1,
   "entry": "plugin.mjs",
   "icon": "icon.svg",

@@ -14,16 +14,21 @@ const protocol=2,build='durable-launch-v2';
 const descriptor=path.join(here,'runtime-context','job-broker-v2.json');
 const pipe='\\\\.\\pipe\\codexhost-windows-jobs-v2-'+createHash('sha256').update(os.homedir().toLowerCase()+here.toLowerCase()).digest('hex').slice(0,20);
 const sleep=ms=>new Promise(resolve=>setTimeout(resolve,ms));
-export async function brokerRequest(action,more={}){
-  const config=JSON.parse(await fs.readFile(descriptor,'utf8'));
-  if(config.pipe!==pipe||config.protocol!==protocol||config.build!==build)throw new Error('Unexpected local job broker identity or protocol; reopen the updated plugin');
+// Errors carry what is known about delivery: BROKER_UNREACHABLE (never sent),
+// BROKER_REFUSED (answered no) or OUTCOME_UNKNOWN (sent, no answer).
+const brokerError=(code,message)=>Object.assign(new Error(message),{code});
+export async function brokerRequest(action,more={},{timeoutMs=Number(process.env.CLAUDE_VPS_BROKER_TIMEOUT_MS)||8000}={}){
+  let config;
+  try{config=JSON.parse(await fs.readFile(descriptor,'utf8'));}catch(error){throw brokerError('BROKER_UNREACHABLE','Local job broker is not running; the request was not sent');}
+  if(config.pipe!==pipe||config.protocol!==protocol||config.build!==build)throw brokerError('BROKER_UNREACHABLE','Unexpected local job broker identity or protocol; reopen the updated plugin');
   return new Promise((resolve,reject)=>{
-    const socket=net.createConnection(pipe);let buffer='';
-    const timer=setTimeout(()=>socket.destroy(new Error('Local job broker timed out; no replay was submitted')),8000);
-    socket.once('connect',()=>socket.write(JSON.stringify({token:config.token,action,...more})+'\n'));
-    socket.on('data',data=>{buffer+=data;if(buffer.length>65536){socket.destroy(new Error('Invalid broker reply'));return;}if(buffer.includes('\n')){try{const reply=JSON.parse(buffer.split('\n')[0]);clearTimeout(timer);socket.end();if(reply.ok)resolve(reply);else reject(new Error(reply.error));}catch(e){socket.destroy(e);}}});
-    socket.once('error',error=>{clearTimeout(timer);reject(error);});
-    socket.once('end',()=>{clearTimeout(timer);if(!buffer.includes('\n'))reject(new Error('Local job broker closed without a result'));});
+    const socket=net.createConnection(pipe);let buffer='',sent=false;
+    const lost=detail=>sent?brokerError('OUTCOME_UNKNOWN','Local job broker received the request but '+detail+'; its outcome is unknown'):brokerError('BROKER_UNREACHABLE','Local job broker could not be reached ('+detail+'); the request was not sent');
+    const timer=setTimeout(()=>socket.destroy(lost('did not reply within '+timeoutMs+' ms')),timeoutMs);
+    socket.once('connect',()=>{socket.write(JSON.stringify({token:config.token,action,...more})+'\n');sent=true;});
+    socket.on('data',data=>{buffer+=data;if(buffer.length>65536){socket.destroy(lost('sent an invalid reply'));return;}if(buffer.includes('\n')){try{const reply=JSON.parse(buffer.split('\n')[0]);clearTimeout(timer);socket.end();if(reply.ok)resolve(reply);else reject(brokerError('BROKER_REFUSED',reply.error));}catch(e){socket.destroy(lost('sent an invalid reply'));}}});
+    socket.once('error',error=>{clearTimeout(timer);reject(error.code?lost(error.code):error);});
+    socket.once('end',()=>{clearTimeout(timer);if(!buffer.includes('\n'))reject(lost('closed without a result'));});
   });
 }
 function cleanEnv(){const env={...process.env};for(const key of Object.keys(env))if(/TOKEN|SECRET|API_KEY|ANTHROPIC|CLAUDE|CODEXHOST_RUNTIME/i.test(key))delete env[key];return env;}

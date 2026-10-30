@@ -189,6 +189,16 @@ async function jobStatus(directory,{includeLogs=true}={}) {
   return {...value,...logs,logs:{stdout:path.join(directory,'stdout.log'),stderr:path.join(directory,'stderr.log')},nextAction:uncertain?'Inspect this task and its output files; do not resubmit':logs.output?.stdout.truncated||logs.output?.stderr.truncated?'Output is a preview only. Use job operation=output with stream and offset=0, then nextOffset, to read the saved output without rerunning. New jobs retain the entire stream; legacy rotated jobs may have missing history.':value.status==='succeeded'?'Open artifacts or read output':['running','starting','queued'].includes(value.status)?'Query or cancel this same requestId':'Read output before deciding on a new task'};
 }
 async function projectJobs(info){const root=path.join(state,'jobs',info.projectId),ids=await fs.readdir(root).catch(e=>e.code==='ENOENT'?[]:Promise.reject(e));const result=[];for(let i=0;i<ids.length;i+=20)result.push(...await Promise.all(ids.slice(i,i+20).map(id=>jobStatus(path.join(root,id),{includeLogs:false}))));return result;}
+const launchClaimed=directory=>fs.access(path.join(directory,'launch.json')).then(()=>true,()=>false);
+async function launchJob(directory,id){
+  try{await brokerRequest('start',{directory});return;}
+  catch(error){
+    if(await launchClaimed(directory))return;
+    const retry=' Resubmitting with the same requestId ('+id+') is safe and never runs it twice; never use a new requestId for this work.';
+    if(error.code==='OUTCOME_UNKNOWN')fail('JOB_START_UNKNOWN',error.message+'. The command may already be running: query {"action":"job","requestId":"'+id+'","operation":"status"} first.'+retry);
+    fail('LOCAL_RUNNER_UNAVAILABLE',error.message+'. The command was not started.'+retry);
+  }
+}
 async function startJob(info,ctx,request) {
   const id=safeId(request.requestId), directory=path.join(state,'jobs',info.projectId,id);
   const environment=await projectEnvironment(info.cwd);
@@ -205,10 +215,14 @@ async function startJob(info,ctx,request) {
   if(created){
     await atomic(path.join(directory,'request.json'),{...spec,fingerprint});
     await atomic(path.join(directory,'status.json'),{requestId:id,status:'starting',cwd:info.cwd});
-    await brokerRequest('start',{directory});
+    await launchJob(directory,id);
   }else{
     const saved=await json(path.join(directory,'request.json')).catch(()=>fail('JOB_START_UNKNOWN','Job reservation exists; inspect status instead of resubmitting'));
     if(saved.fingerprint!==fingerprint)fail('REQUEST_ID_CONFLICT','Request ID already belongs to different work');
+    // A reservation the runner never accepted is launched now; the broker's
+    // exclusive launch claim keeps this from ever starting the job twice.
+    const current=await json(path.join(directory,'status.json')).catch(()=>({status:'starting'}));
+    if(current.status==='starting'&&!await launchClaimed(directory))await launchJob(directory,id);
   }
   const deadline=Date.now()+Math.min(Math.max(Number(request.waitMs)||0,0),30000);
   let result;

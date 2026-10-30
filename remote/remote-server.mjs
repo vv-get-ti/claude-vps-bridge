@@ -178,7 +178,7 @@ async function releaseOpening(sessionId,opening){
   });return opening.releasing;
 }
 async function request(method, params) {
-  if(method==='health')return {protocol:2,bridgeVersion:'0.13.5',dependencyVersion,capabilities:['project-context','local-policy','local-hooks','media-cache','agent-context','job-recovery','native-fork','duplex-control','live-reverse-probe','duplex-tools','context-delta','local-mcp','account-usage'],adapterSha256:createHash('sha256').update(await readFile(modulePath)).digest('hex')};
+  if(method==='health')return {protocol:2,bridgeVersion:'0.13.6',dependencyVersion,capabilities:['project-context','local-policy','local-hooks','media-cache','agent-context','job-recovery','native-fork','duplex-control','live-reverse-probe','duplex-tools','context-delta','local-mcp','account-usage'],adapterSha256:createHash('sha256').update(await readFile(modulePath)).digest('hex')};
   if(method==='account')return inspectAccount();
   if(method==='reverse-health'){
     const legacy=remoteConfig.legacy;if(!legacy?.enabled)return false;
