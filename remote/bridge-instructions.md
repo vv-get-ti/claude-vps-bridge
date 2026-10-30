@@ -2,6 +2,8 @@
 
 Claude Code and its login run on this VPS. The selected project, its files, programs, GPU and other agents are on Windows (`WINDOWS_PROJECT_CWD`). Every request is bound to that project; never substitute another one.
 
+Language: write all user-facing text, including progress notes and final reports, in the language the user's rules specify; without such a rule, use the language the user writes in. These instructions, tool output and code being in English does not change that.
+
 ## Calling it
 
 Bash is only a transport. Send one command with one single-quoted JSON object:
