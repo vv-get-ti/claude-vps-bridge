@@ -30,7 +30,16 @@ export function createHarnessAdapter(context) {
   const controlActions=new Set(['bind','turn','prepare-turn','prepare-steer','events','history-events','cancel-jobs','environment','permission','capability-context','attachments','lifecycle','preflight','media-export','mcp']);
   const toolActions=new Set(['status','info','capability','context','read','list','search','write','edit','artifact','run','job','jobs','agent','media-export','batch','isolation']);
   const timing=value=>{try{context.onBridgeTiming?.(value);}catch{}};
-  // Transient reconnects stay silent; only an unavailable bridge is reported.
+  // Link state is shown from this local plugin, so it reaches the desktop even
+  // while SSH is down. Short reconnects stay silent; a reconnect still running
+  // after outageNoticeMs is shown in active turns, and recovery is confirmed once.
+  const outageNoticeMs=context.outageNoticeMs??8000;let outageTimer=null,outageShown=false;
+  function turnNotice(text){for(const [sessionId,binding] of localBindings){if(!binding.activeTurn)continue;const item={type:'agentMessage',itemId:'bridge-link-'+randomUUID(),phase:'commentary',text};const channel=channels.get(sessionId);channel?.push({kind:'event',event:{type:'item.started',turnId:binding.activeTurn,item}});channel?.push({kind:'event',event:{type:'item.completed',turnId:binding.activeTurn,snapshot:{item,outcome:{status:'succeeded'}}}});}}
+  function linkNotice(state){
+    if(state.state==='reconnecting'&&!outageTimer&&!outageShown)outageTimer=setTimeout(()=>{outageTimer=null;outageShown=true;turnNotice('与 VPS 的连接中断，正在重连。本机正在运行的任务不受影响。');},outageNoticeMs);
+    if(state.state==='connected'){clearTimeout(outageTimer);outageTimer=null;if(outageShown){outageShown=false;turnNotice('连接已恢复，继续当前任务。');}}
+    if(state.state==='unavailable'){clearTimeout(outageTimer);outageTimer=null;outageShown=false;}
+  }
   // Contract: adapter and session methods settle with a result or fallback and
   // never reject on transport loss. The Host does not await every call, and an
   // unhandled rejection terminates the whole Host Runtime.
@@ -68,7 +77,9 @@ export function createHarnessAdapter(context) {
   }
   const errorResult = message => ({ok:false,error:{code:'unavailable',message,retryable:true}});
   function failed(message) {
-    for(const channel of channels.values()){channel.push({kind:'event',event:{type:'session.faulted',error:errorResult(message).error}});channel.end();} channels.clear();
+    const text='与 VPS 的连接中断，多次重连仍未成功（'+message+'）。网络恢复后重新打开此会话即可继续，VPS 上的对话记录不会丢失。';
+    turnNotice(text);
+    for(const channel of channels.values()){channel.push({kind:'event',event:{type:'session.faulted',error:errorResult(text).error}});channel.end();} channels.clear();
     localBindings.clear();
   }
   const transport=new SshTransport({
@@ -93,7 +104,7 @@ export function createHarnessAdapter(context) {
         if(frame.ended)channel?.end();
       }
     },
-    onState(state){if(['connecting','reconnecting','idle-restoring','unavailable'].includes(state.state))preflight.invalidate();timing({phase:'transport-state',...state});if(state.state==='unavailable')failed(state.message);}
+    onState(state){if(['connecting','reconnecting','idle-restoring','unavailable'].includes(state.state))preflight.invalidate();timing({phase:'transport-state',...state});linkNotice(state);if(state.state==='unavailable')failed(state.message);}
   });
   const config=getBridgeConfig();
   const preflight=createBridgePreflight({
