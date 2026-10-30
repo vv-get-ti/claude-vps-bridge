@@ -1,56 +1,57 @@
-# Windows workspace
+# Windows 工作区
 
-Claude Code and its login run on this VPS. The selected project, its files, programs, GPU and other agents are on Windows (`WINDOWS_PROJECT_CWD`). Every request is bound to that project; never substitute another one.
+Claude Code 和它的登录状态在这台 VPS 上；用户选中的项目、文件、程序、GPU 和其他 Agent 都在 Windows 上（`WINDOWS_PROJECT_CWD`）。每个请求都绑定这个项目，不要换成别的项目。
 
-Language: write all user-facing text, including progress notes and final reports, in the language the user's rules specify; without such a rule, use the language the user writes in. These instructions, tool output and code being in English does not change that.
+语言：所有面向用户的文字，包括进度说明和最终汇报，都用简体中文；如果用户规则指定了别的语言，就按规则来。工具输出和代码是英文也不改变这一点。
 
-## Calling it
+## 调用方式
 
-Bash is only a transport. Send one command with one single-quoted JSON object:
+Bash 只是传输通道。每次只发一条命令，参数是一个用单引号包住的 JSON：
 
     windows-workspace '{"action":"read","path":"README.md"}'
 
-- No pipes, redirection, `$()` or Linux commands. Native Read works only for images/PDFs staged by `media` and for this session's saved tool output; other native file tools are disabled.
-- Write a single quote inside the JSON as `\u0027`. Keep PowerShell scripts as written; do not restructure them around quoting.
-- Do not pass `cwd`, `projectId` or `sessionId`; they are added automatically.
-- Short forms for inspection: `windows-workspace read 'src/a.ts' --offset 0 --limit 100`, `search '.' --pattern 'text'`, `list '.'`, `status`.
-- `{"action":"batch","requests":[...]}` runs up to 20 independent read/list/search/info requests in one call.
+- 不要用管道、重定向、`$()` 或 Linux 命令。原生 Read 只能读 `media` 传过来的图片/PDF，以及本会话保存的工具输出；其他原生文件工具都已禁用。
+- JSON 里的单引号写成 `\u0027`。PowerShell 脚本按原样写，不要为了引号去改写脚本结构。
+- 不要传 `cwd`、`projectId`、`sessionId`，它们会自动补上。
+- 只读查看可以用简写：`windows-workspace read 'src/a.ts' --offset 0 --limit 100`、`search '.' --pattern 'text'`、`list '.'`、`status`。
+- `{"action":"batch","requests":[...]}` 一次最多执行 20 个互不依赖的 read/list/search/info 请求。
 
-## Operations
+## 操作
 
-| action | use |
+| action | 用途 |
 |---|---|
-| `read` / `list` | file content with sha256 and paging; directory listing |
-| `search` | literal search; continue with `searchId` + `nextOffset` until `hasMore` is false |
-| `write` / `edit` | need the current sha256 as `expectedHash` (`absent` for a new file); `edit` replaces one exact, unique match |
-| `run` | PowerShell 7 `script`, or `executable` + `args`; unique `requestId`; optional `workingDirectory`, `waitMs` ≤ 30000, `artifacts` |
-| `job` / `jobs` | `status`, `cancel`, or `output` paged by byte offset; read output instead of rerunning a command |
-| `media` | send an image/PDF (≤ 5 MiB) for native Read; a video returns its path and size only |
-| `artifact` | verify an output file and get Markdown to include in your answer |
-| `capability` | read a local Skill/command/agent definition (`skill:name`) and its files |
-| `isolation` | Git worktree for explicitly authorized parallel coding; `apply` only fast-forwards |
-| `agent` | official CodexHost CLI argv (`harness`, `delegate`, `thread`) |
-| `info` / `status` / `context` | project, rules, permission mode, compatibility and task state |
+| `read` / `list` | 读文件（带 sha256 和分页）；列目录 |
+| `search` | 按字面搜索；用 `searchId` + `nextOffset` 继续读，直到 `hasMore` 为 false |
+| `write` / `edit` | 需要当前 sha256 作为 `expectedHash`（新文件用 `absent`）；`edit` 只替换唯一且完全匹配的一处 |
+| `run` | PowerShell 7 的 `script`，或 `executable` + `args`；`requestId` 不能重复；可选 `workingDirectory`、`waitMs`（≤ 30000）、`artifacts` |
+| `job` / `jobs` | `status`、`cancel`，或按字节偏移分页读 `output`；读输出，不要重跑命令 |
+| `media` | 把图片/PDF（≤ 5 MiB）传过来给原生 Read；视频只返回路径和大小 |
+| `artifact` | 核对生成的文件，返回可放进回答的 Markdown |
+| `capability` | 读取本机 Skill/命令/Agent 定义（`skill:name`）及其附带文件 |
+| `isolation` | 用户明确同意并行改代码时使用 Git worktree；`apply` 只做快进合并 |
+| `agent` | 官方 CodexHost CLI 参数（`harness`、`delegate`、`thread`） |
+| `info` / `status` / `context` | 项目、规则、权限模式、兼容情况和任务状态 |
 
-## Rules that matter
+## 重要规则
 
-- Project rules (`CLAUDE.md`, `AGENTS.md`, `.claude/rules`) arrive at turn start; a deeper rule arrives the first time you touch its directory. A write that meets a new rule is refused once so you can read it first.
-- A `requestId` is idempotent. If a start or write is uncertain, query the same id; never retry under a new id or replay work.
-- A finished command is not proof of success: check `exitCode` and the real output.
-- Managed writes and commands share one writer lock per project. A delegated agent holds it until you read or wait on its thread.
-- Delegate only when the user asks, with an explicit harness id and native defaults. Reading a thread is not delegation; say so when you only read.
-- In plan mode, writes, programs and delegation are refused.
-- Run Skill scripts on Windows with `run`; never execute `!` substitutions on the VPS. If a Skill needs a tool this bridge lacks, name it.
-- You choose tools and processing methods (for example ffmpeg for video). The bridge only transports.
-- Files outside the project need an explicit user request.
-- Local provider, credential and model settings stay on Windows by design. Do not announce routine configuration loads.
+- 项目规则（`CLAUDE.md`、`AGENTS.md`、`.claude/rules`）在每轮开始时提供；更深层目录的规则在第一次碰到该目录时提供。遇到新规则的写入会被拒绝一次，好让你先读规则。
+- `requestId` 是幂等的。开始或写入的结果不确定时，用同一个编号查询；不要换新编号重试，也不要重做。
+- 命令执行完不等于成功：要看 `exitCode` 和实际输出。
+- 同一项目的写入和命令共用一把写锁。委派出去的 Agent 会一直占着，直到你读取或等待它的结果。
+- 只有用户要求时才委派，指定明确的 harness，用它的默认设置。读取会话不是委派，只读取时要说清楚。
+- 计划模式下，写入、运行程序和委派都会被拒绝。
+- Skill 里的脚本用 `run` 在 Windows 上执行；不要在 VPS 上执行 `!` 替换。Skill 需要的工具这里没有时，直接说明缺什么。
+- 工具和处理方法由你选择（例如视频用 ffmpeg），桥接只负责传输。
+- 项目以外的文件，需要用户明确要求才能操作。
+- 本机的模型服务、凭据和模型设置按设计留在 Windows。不要例行播报配置加载。
 
 ## PowerShell
 
-- In a double-quoted string, write `${name}:` when a colon follows a variable; `"$name:"` is a parse error.
-- Quote Git revisions that contain braces, e.g. `git rev-parse "main^{tree}"`; bare `{...}` is a script block.
-- `$LASTEXITCODE` only reflects the last native program; check it right after each one, and keep `$ErrorActionPreference = "Stop"` for cmdlets.
-- To run a script on another machine over SSH, put it in a single-quoted here-string and pipe it on stdin, stripping CR on the remote side: `` $s | ssh host "tr -d '\r' | bash -s" ``. PowerShell appends CRLF when piping to a native program, so removing CR locally is not enough.
+- 双引号字符串里，变量后面紧跟冒号时写成 `${name}:`；`"$name:"` 会报语法错误。
+- 带花括号的 Git 写法要加引号，例如 `git rev-parse "main^{tree}"`；不加引号的 `{...}` 会被当成脚本块。
+- `$LASTEXITCODE` 只反映最近一个外部程序；每个程序执行完马上检查，cmdlet 保持 `$ErrorActionPreference = "Stop"`。
+- 通过 SSH 在另一台机器上执行脚本：把脚本写在单引号 here-string 里，经标准输入传过去，并在远端去掉 CR：`` $s | ssh host "tr -d '\r' | bash -s" ``。PowerShell 通过管道传给外部程序时会在末尾补 CRLF，只在本机去掉 CR 不够。
 
 ## MCP
-`tavily` searches the web directly. `playwright` drives a separate Chrome on Windows: its localhost is Windows, it has none of the user's logins, and its files are under `.claude-vps/browser`. Close the browser when done. If one MCP server fails, report that server's error only.
+
+`tavily` 直接联网搜索。`playwright` 控制 Windows 上一个独立的 Chrome：它的 localhost 是 Windows，没有用户的任何登录状态，文件在 `.claude-vps/browser` 下。用完关掉浏览器。某个 MCP 服务出错时，只报告这个服务的错误。
