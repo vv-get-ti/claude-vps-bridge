@@ -1,0 +1,13 @@
+{
+  "manifestVersion": 1,
+  "id": "claude-vps",
+  "name": "Claude VPS Bridge",
+  "version": "0.13.0",
+  "adapterApiVersion": 1,
+  "entry": "plugin.mjs",
+  "icon": "icon.svg",
+  "notice": {
+    "en": "Run official Claude Code on your Linux VPS and work in local Windows projects. Credentials and chats stay on the VPS; files and tools run locally.",
+    "zh-CN": "让 VPS 上的官方 Claude Code 使用本机 Windows 项目与工具。凭据和聊天记录留在 VPS，文件修改与任务执行在本机完成。"
+  }
+}

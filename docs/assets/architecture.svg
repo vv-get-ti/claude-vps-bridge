@@ -1,0 +1,53 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1260" height="548" viewBox="0 0 1260 548" role="img" aria-labelledby="title desc">
+  <title id="title">Claude VPS Bridge 工作原理</title>
+  <desc id="desc">Windows 上的 CodexHost 插件通过 Windows 发起的 SSH 连接 VPS Claude Code，VPS 连接模型服务与可选 Tavily，Windows 运行 Playwright。工具请求发往本机，执行结果返回 VPS。文件与工具在本机，登录凭据和原生会话在 VPS。</desc>
+  <defs>
+    <marker id="request" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0 0 8 4 0 8Z" fill="#18685e"/></marker>
+    <marker id="result" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0 0 8 4 0 8Z" fill="#9b6627"/></marker>
+  </defs>
+  <rect width="1260" height="548" rx="20" fill="#f6f7f9"/>
+  <g font-family="Microsoft YaHei, PingFang SC, Noto Sans CJK SC, sans-serif" fill="#19333b">
+    <text x="40" y="51" font-size="26" font-weight="700">Claude Code 在远端，工作在本机</text>
+    <rect x="40" y="85" width="390" height="374" rx="16" fill="#fff" stroke="#d9e1e5"/>
+    <rect x="650" y="85" width="350" height="374" rx="16" fill="#fff" stroke="#d9e1e5"/>
+    <text x="66" y="124" font-size="22" font-weight="700">本机 Windows</text>
+    <text x="676" y="124" font-size="22" font-weight="700">远端 Linux VPS</text>
+    <text x="66" y="158" font-size="16" fill="#576d75">在 CodexHost 中选择项目、查看结果</text>
+    <text x="676" y="158" font-size="16" fill="#576d75">官方 Claude Code 运行环境</text>
+    <rect x="66" y="192" width="340" height="96" rx="12" fill="#163c46"/>
+    <text x="236" y="231" text-anchor="middle" font-size="22" font-weight="700" fill="#fff">Claude VPS Bridge</text>
+    <text x="236" y="262" text-anchor="middle" font-size="16" fill="#d3e7e7">CodexHost 插件</text>
+    <rect x="676" y="192" width="298" height="96" rx="12" fill="#edf5f2" stroke="#c7ddd6"/>
+    <text x="825" y="231" text-anchor="middle" font-size="22" font-weight="700">Claude Code</text>
+    <text x="825" y="262" text-anchor="middle" font-size="16" fill="#576d75">理解需求、规划与调用工具</text>
+    <text x="540" y="182" text-anchor="middle" font-size="17" font-weight="700">SSH（Windows 发起）</text>
+    <path d="M674 221H409" fill="none" stroke="#18685e" stroke-width="2" marker-end="url(#request)"/>
+    <rect x="494" y="204" width="92" height="25" rx="6" fill="#f6f7f9"/>
+    <text x="540" y="222" text-anchor="middle" font-size="15" fill="#18685e">工具请求</text>
+    <path d="M408 264H673" fill="none" stroke="#9b6627" stroke-width="2" marker-end="url(#result)"/>
+    <rect x="494" y="249" width="92" height="25" rx="6" fill="#f6f7f9"/>
+    <text x="540" y="267" text-anchor="middle" font-size="15" fill="#9b6627">执行结果</text>
+    <path d="M236 288V318" stroke="#b6c7cc" stroke-width="2"/>
+    <rect x="66" y="318" width="162" height="58" rx="9" fill="#f1f5f6"/>
+    <rect x="244" y="318" width="162" height="58" rx="9" fill="#f1f5f6"/>
+    <rect x="66" y="388" width="162" height="48" rx="9" fill="#f1f5f6"/>
+    <rect x="244" y="388" width="162" height="48" rx="9" fill="#f1f5f6"/>
+    <text x="147" y="353" text-anchor="middle" font-size="16">项目文件与规则</text>
+    <text x="325" y="353" text-anchor="middle" font-size="16">PowerShell 与 GPU</text>
+    <text x="147" y="407" text-anchor="middle" font-size="14">浏览器</text>
+    <text x="147" y="427" text-anchor="middle" font-size="14">（Playwright）</text>
+    <text x="325" y="418" text-anchor="middle" font-size="16">本机其他 Agent</text>
+    <rect x="676" y="310" width="298" height="38" rx="9" fill="#f1f5f6"/>
+    <rect x="676" y="355" width="298" height="38" rx="9" fill="#f1f5f6"/>
+    <rect x="676" y="400" width="298" height="38" rx="9" fill="#f1f5f6"/>
+    <text x="825" y="335" text-anchor="middle" font-size="16">登录凭据</text>
+    <text x="825" y="380" text-anchor="middle" font-size="16">原生聊天记录与会话恢复</text>
+    <text x="825" y="425" text-anchor="middle" font-size="16">Tavily（可选）</text>
+    <rect x="1040" y="192" width="180" height="96" rx="12" fill="#fff" stroke="#c7ddd6"/>
+    <text x="1130" y="234" text-anchor="middle" font-size="20" font-weight="700">模型服务</text>
+    <text x="1130" y="264" text-anchor="middle" font-size="14" fill="#576d75">接收上下文与工具结果</text>
+    <path d="M976 226H1037" fill="none" stroke="#18685e" stroke-width="2" marker-end="url(#request)"/>
+    <path d="M1038 264H978" fill="none" stroke="#9b6627" stroke-width="2" marker-end="url(#result)"/>
+    <text x="40" y="505" font-size="16" fill="#576d75">项目无需整份同步；读取的内容、工具结果与传入的附件会发送到远端及模型服务。</text>
+  </g>
+</svg>

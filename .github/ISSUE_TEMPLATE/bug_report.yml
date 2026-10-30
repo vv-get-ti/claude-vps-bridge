@@ -1,0 +1,33 @@
+name: 故障反馈
+description: 报告可以复现的安装、连接、会话或本机工具问题。
+title: '[问题] '
+body:
+  - type: markdown
+    attributes:
+      value: 请使用脱敏内容。不要粘贴凭据、SSH 私钥、真实服务器地址、完整聊天或生产日志；安全问题请先阅读 SECURITY.md。
+  - type: textarea
+    id: versions
+    attributes:
+      label: 运行环境
+      description: 插件、CodexHost、Claude Code、Windows、Linux 与 PowerShell 的版本；注明是否启用了可选 MCP。
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: 复现步骤
+      description: 从打开哪个项目、恢复或新建哪个类型的聊天开始描述。路径可用示例代替。
+    validations:
+      required: true
+  - type: textarea
+    id: behavior
+    attributes:
+      label: 预期与实际结果
+      description: 写明预期行为、实际发生的情况及最近是否升级过组件。
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: 必要的脱敏证据
+      description: 只提供相关错误片段，提交前检查文本和图片是否包含私人信息。

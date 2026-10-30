@@ -1,0 +1,23 @@
+name: 功能建议
+description: 描述你要完成的工作，以及目前遇到的限制。
+title: '[建议] '
+body:
+  - type: textarea
+    id: scenario
+    attributes:
+      label: 使用场景
+      description: 你想完成什么？现有流程具体卡在哪里？
+    validations:
+      required: true
+  - type: textarea
+    id: outcome
+    attributes:
+      label: 期望结果
+      description: 描述怎样的行为能解决问题；有替代办法也可以一起说明。
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: 相关环境与限制
+      description: 涉及的系统、Host 版本和可选工具；不要包含私人配置或凭据。

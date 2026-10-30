@@ -1,0 +1,10 @@
+import fs from 'node:fs';
+import path from 'node:path';
+import os from 'node:os';
+import {fileURLToPath} from 'node:url';
+export const bridgeRoot=path.dirname(fileURLToPath(import.meta.url));
+const file=path.join(bridgeRoot,'remote-config.json');
+export const remoteConfig=fs.existsSync(file)?JSON.parse(fs.readFileSync(file,'utf8')):{};
+export const workspaceRoot=remoteConfig.workspaceRoot??path.join(os.homedir(),'windows-local-work');
+export const workspaceCommand=path.join(bridgeRoot,'windows-workspace');
+export const agentCommand=path.join(bridgeRoot,'windows-agent');

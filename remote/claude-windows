@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+set -euo pipefail
+bridge_root=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+export WINDOWS_BRIDGE_ROOT="$bridge_root"
+export PATH="$bridge_root:$PATH"
+claude_command=$(cat "$bridge_root/claude-path")
+if [[ -n "${WINDOWS_PROJECT_CWD:-}" ]]; then
+  export CODEXHOST_CLI_PATH="$bridge_root/windows-agent"
+  instructions=$(cat "$bridge_root/bridge-instructions.md")
+  mcp_config="$bridge_root/mcp-config.private.json"
+  if [[ ! -r "$mcp_config" ]]; then
+    mcp_config='{"mcpServers":{}}'
+  fi
+  exec "$claude_command" --append-system-prompt "$instructions" --system-prompt-snapshot off --tools Bash,Read,AskUserQuestion,WebSearch,WebFetch --strict-mcp-config --mcp-config "$mcp_config" --settings "$bridge_root/workspace-settings.json" "$@"
+fi
+exec "$claude_command" "$@"

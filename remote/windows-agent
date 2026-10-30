@@ -1,0 +1,4 @@
+#!/usr/bin/env python3
+import json,subprocess,sys
+from bridge_paths import WORKSPACE_COMMAND
+raise SystemExit(subprocess.run([WORKSPACE_COMMAND,json.dumps({'action':'agent','argv':sys.argv[1:]})]).returncode)

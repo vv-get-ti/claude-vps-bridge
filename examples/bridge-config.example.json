@@ -1,0 +1,13 @@
+{
+  "schemaVersion": 1,
+  "sshHost": "my-linux-host",
+  "hostRoot": "D:\\Apps\\CodexHost",
+  "sshExecutable": "C:\\Windows\\System32\\OpenSSH\\ssh.exe",
+  "pwshExecutable": "C:\\Program Files\\PowerShell\\7\\pwsh.exe",
+  "remoteRoot": "/home/YOUR_LINUX_USER/.codexhost/windows-bridge",
+  "remoteWorkspaceRoot": "/home/YOUR_LINUX_USER/windows-local-work",
+  "remoteClaudeExecutable": "/home/YOUR_LINUX_USER/.local/bin/claude",
+  "legacy": {
+    "enabled": false
+  }
+}

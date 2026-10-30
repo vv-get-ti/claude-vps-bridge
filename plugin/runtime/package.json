@@ -1,0 +1,12 @@
+{
+  "name": "claude-vps-windows-runtime",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "picomatch": "4.0.3",
+    "yaml": "2.8.1"
+  },
+  "optionalDependencies": {
+    "@playwright/mcp": "0.0.80"
+  }
+}

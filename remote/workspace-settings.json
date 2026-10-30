@@ -1,0 +1,6 @@
+{
+  "hooks": {
+    "PreToolUse": [{"matcher":".*","hooks":[{"type":"command","command":"python3 \"$WINDOWS_BRIDGE_ROOT/workspace-guard.py\"","timeout":160}]}],
+    "SessionStart": [{"matcher":"compact","hooks":[{"type":"command","command":"python3 \"$WINDOWS_BRIDGE_ROOT/compact-context.py\"","timeout":120}]}]
+  }
+}
