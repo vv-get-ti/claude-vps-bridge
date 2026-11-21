@@ -1,0 +1,52 @@
+/* Scoped to the settings page; colors derive from the host text color so
+   the page follows light and dark themes without reading private tokens. */
+.cvb{position:relative;display:flex;flex-direction:column;gap:12px;font:inherit;color:inherit;max-width:960px}
+.cvb h2{margin:0;font-size:1.15em;font-weight:600}
+.cvb h3{margin:0 0 8px;font-size:1.05em;font-weight:600}
+.cvb p{margin:0}
+.cvb-muted{opacity:.65;font-size:.9em}
+.cvb-warn{color:#d97706;font-size:.9em}
+.cvb-error{color:#dc2626;font-size:.9em}
+.cvb-head{display:flex;align-items:flex-start;justify-content:space-between;gap:12px}
+.cvb-tabs{display:flex;gap:4px;border-bottom:1px solid color-mix(in srgb,currentColor 15%,transparent)}
+.cvb-tab{background:none;border:0;border-bottom:2px solid transparent;color:inherit;font:inherit;padding:6px 10px;cursor:pointer;opacity:.7}
+.cvb-tab-on{border-bottom-color:currentColor;opacity:1;font-weight:600}
+.cvb-filters{display:flex;flex-wrap:wrap;gap:8px}
+.cvb-filters select,.cvb-filters input{font:inherit;color:inherit;background:color-mix(in srgb,currentColor 5%,transparent);border:1px solid color-mix(in srgb,currentColor 18%,transparent);border-radius:6px;padding:5px 8px}
+.cvb-filters input{flex:1;min-width:180px}
+.cvb-filters option{color:initial}
+.cvb-check{display:flex;align-items:center;gap:8px;font-size:.9em;cursor:pointer}
+.cvb-select-all{opacity:.8}
+.cvb-list{list-style:none;margin:0;padding:0;border:1px solid color-mix(in srgb,currentColor 12%,transparent);border-radius:8px;overflow:hidden}
+.cvb-row{display:flex;align-items:center;gap:10px;padding:8px 12px;border-top:1px solid color-mix(in srgb,currentColor 8%,transparent)}
+.cvb-row:first-child{border-top:0}
+.cvb-row:hover{background:color-mix(in srgb,currentColor 4%,transparent)}
+.cvb-selected{background:color-mix(in srgb,currentColor 7%,transparent)}
+.cvb-main{flex:1;min-width:0}
+.cvb-title{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.cvb-meta{display:flex;flex-wrap:wrap;gap:4px 14px;font-size:.82em;opacity:.65}
+.cvb-id{font-family:ui-monospace,SFMono-Regular,Consolas,monospace}
+.cvb-badges{display:flex;align-items:center;gap:6px;flex-shrink:0}
+.cvb-badge{font-size:.78em;padding:1px 7px;border-radius:999px;border:1px solid color-mix(in srgb,currentColor 25%,transparent);white-space:nowrap}
+.cvb-badge-run{color:#16a34a;border-color:color-mix(in srgb,#16a34a 50%,transparent)}
+.cvb-badge-warn{color:#d97706;border-color:color-mix(in srgb,#d97706 50%,transparent)}
+.cvb-button{font:inherit;color:inherit;background:color-mix(in srgb,currentColor 6%,transparent);border:1px solid color-mix(in srgb,currentColor 20%,transparent);border-radius:6px;padding:5px 12px;cursor:pointer;white-space:nowrap}
+.cvb-button:hover:not(:disabled){background:color-mix(in srgb,currentColor 12%,transparent)}
+.cvb-button:disabled{opacity:.45;cursor:default}
+.cvb-small{padding:2px 8px;font-size:.82em}
+.cvb-primary{background:#2563eb;border-color:#2563eb;color:#fff}
+.cvb-primary:hover:not(:disabled){background:#1d4ed8}
+.cvb-danger{background:#dc2626;border-color:#dc2626;color:#fff}
+.cvb-danger:hover:not(:disabled){background:#b91c1c}
+.cvb-link{background:none;border:0;color:inherit;font:inherit;opacity:.7;cursor:pointer;text-decoration:underline}
+.cvb-bar{display:flex;justify-content:flex-end;align-items:center;gap:8px;padding:10px 12px;border-radius:8px;background:color-mix(in srgb,currentColor 7%,transparent);border:1px solid color-mix(in srgb,currentColor 15%,transparent)}
+.cvb-notes{margin:0;padding-left:18px;font-size:.85em;opacity:.75}
+.cvb-report{border:1px solid color-mix(in srgb,#16a34a 40%,transparent);border-radius:8px;padding:10px 12px;font-size:.9em;display:flex;flex-direction:column;gap:6px}
+.cvb-report-warn{border-color:color-mix(in srgb,#d97706 50%,transparent)}
+.cvb-report-head{display:flex;justify-content:space-between;align-items:center}
+.cvb-report ul{margin:0;padding-left:18px}
+/* Inline confirmation card: no system colors, so it matches any host theme. */
+.cvb-overlay{display:block}
+.cvb-dialog{border:1px solid color-mix(in srgb,currentColor 25%,transparent);border-radius:10px;padding:14px 16px;background:color-mix(in srgb,currentColor 4%,transparent);display:flex;flex-direction:column;gap:10px}
+.cvb-preview{margin:0;padding-left:18px;font-size:.88em;opacity:.8;max-height:180px;overflow:auto}
+.cvb-actions{display:flex;justify-content:flex-end;gap:8px}

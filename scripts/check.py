@@ -17,6 +17,18 @@ for file in [*PLUGIN.glob('*.mjs'), *(PLUGIN / 'runtime').glob('*.mjs'), *REMOTE
     if not file.name.startswith(('test-', 'benchmark-')):
         subprocess.run([node, '--check', str(file)], check=True, cwd=ROOT)
 
+# The optional Desktop extension ships separately but must stay loadable.
+EXTENSION = ROOT / 'extension'
+extension = json.loads((EXTENSION / 'manifest.json').read_text(encoding='utf-8'))
+if extension.get('manifestVersion') != 1 or extension.get('desktopApi') != 1:
+    raise SystemExit('extension/manifest.json must target manifestVersion 1 and desktopApi 1')
+for resource in (extension['desktop']['script'], extension['desktop']['style'], extension['backend']['script']):
+    file = EXTENSION / resource
+    if not file.is_file():
+        raise SystemExit('Missing extension file: extension/' + resource)
+    if file.suffix in ('.js', '.mjs'):
+        subprocess.run([node, '--check', str(file)], check=True, cwd=ROOT)
+
 manifest = json.loads((PLUGIN / 'manifest.json').read_text(encoding='utf-8'))
 for field in ('entry', 'icon'):
     if not (PLUGIN / manifest[field]).is_file():

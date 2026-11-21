@@ -22,6 +22,7 @@ Claude VPS Bridge 是一个 [CodexHost](https://github.com/BytePioneer-AI/codex-
 - **继续原来的工作**：打开原聊天即可续接远端会话，也可以 fork 出新的聊天分支。需要并行改代码时可使用 Git worktree。
 - **处理文件与附件**：将图片和 PDF 交给 Claude；视频等任务由 Claude 自行选择本机工具处理，生成的文件保存在本机。
 - **查看账号额度**：在 CodexHost 中查看用量与重置时间。
+- **管理 VPS 会话**：查看、归档、恢复和永久删除 VPS 上的 Claude 会话，也可以在 CodexHost 的导入界面里导入已有会话；可选的 Desktop 扩展提供设置页面。
 
 支持 CodexHost 的 Agent 协作，也可按需接入本机 MCP 工具。
 
@@ -85,6 +86,7 @@ Report the current Windows project path. Do not modify any files.
 | 配置 SSH、登录 Claude、完成安装 | [安装指南](docs/SETUP.md) |
 | 使用项目规则、Skills、权限与可选 MCP | [配置说明](docs/CONFIGURATION.md) |
 | 使用图片和 PDF | [附件支持](docs/ATTACHMENTS.md) |
+| 归档、恢复或删除 VPS 上的会话 | [VPS 会话管理](docs/SESSIONS.md) |
 | 升级、诊断、恢复或停用插件 | [维护说明](docs/OPERATIONS.md) |
 | 了解已知问题和使用细节 | [常见问题](docs/FAQ.md) |
 
@@ -111,6 +113,7 @@ Report the current Windows project path. Do not modify any files.
 ```text
 plugin/        Windows 本机插件，安装到 CodexHost 插件目录
 remote/        VPS 端桥接，安装到远端用户目录
+extension/     可选的 CodexHost Desktop 扩展（VPS 会话管理页面），单独安装
 installer/     配置、安装、升级与停用脚本
 docs/          安装、配置、架构与维护文档
 examples/      配置示例
