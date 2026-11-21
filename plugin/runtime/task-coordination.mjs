@@ -2,13 +2,15 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import {randomUUID} from 'node:crypto';
+import {traceWindowsDescendants} from './process-tree.mjs';
 const sleep=ms=>new Promise(resolve=>setTimeout(resolve,ms));
 const projectIdPattern=/^[a-f0-9]{64}$/;
 const requestIdPattern=/^[a-zA-Z0-9_-]{1,100}$/;
+const validProbePid=pid=>Number.isInteger(pid)&&pid>=1&&pid<=0x7fffffff;
 function directory(root,id){if(!projectIdPattern.test(id))throw new Error('Invalid project identity');return path.join(root,'writers',id);}
 const readRecord=async file=>{try{return JSON.parse(await fs.readFile(file,'utf8'));}catch{return null;}};
 export function processPresence(pid){
-  if(!Number.isInteger(pid)||pid<1||pid>0x7fffffff)return 'unconfirmed';
+  if(!validProbePid(pid))return 'unconfirmed';
   try{process.kill(pid,0);return 'alive';}catch(error){return error.code==='ESRCH'?'missing':'unconfirmed';}
 }
 export async function writerStatus(root,id){
@@ -23,13 +25,48 @@ export async function releaseWriter(root,id,token){
   await fs.unlink(path.join(dir,'owner.json'));await fs.rmdir(dir);
 }
 const recoveryDirectory=job=>path.join(job,'writer-recovered');
-export async function writerRecovery(job){
+const recoveryPlan=job=>path.join(job,'writer-recovery.json');
+export async function writerRecovery(job,status){
   const dir=recoveryDirectory(job),owner=await readRecord(path.join(dir,'owner.json'));
-  if(owner?.kind!=='job'||!owner.token||!owner.runnerToken||owner.requestId!==path.basename(job)||owner.projectId!==path.basename(path.dirname(job)))return null;
+  if(owner?.kind!=='job'||!owner.token||owner.requestId!==path.basename(job)||owner.pid!==status.runnerPid)return null;
+  const plan=await readRecord(recoveryPlan(job));
+  if(owner.projectId!==undefined&&owner.projectId!==path.basename(path.dirname(job)))return null;
+  if(owner.runnerToken?owner.runnerToken!==status.runnerToken:plan?.token!==owner.token)return null;
   const stat=await fs.stat(dir).catch(()=>null);
-  return stat?{requestId:owner.requestId,at:stat.ctime.toISOString()}:null;
+  return stat?{requestId:owner.requestId,at:stat.ctime.toISOString(),...(plan?.token===owner.token&&plan.forced?{forced:true}:{})}:null;
 }
-export async function reclaimJobWriter(root,scope,owner,{projectId=owner.projectId??scope,requestId=owner.requestId}={}){
+async function prepareRecovery(job,token,forced){
+  // Persist the decision before moving the writer. The first eligible attempt
+  // selects the receipt, and other eligible attempts may complete its move.
+  const file=recoveryPlan(job),temp=file+'.'+randomUUID()+'.tmp';
+  let plan=await readRecord(file);
+  if(!plan){
+    try{
+      await fs.writeFile(temp,JSON.stringify({token,forced}),{flag:'wx'});
+      await fs.link(temp,file);
+    }catch(error){if(error.code!=='EEXIST')throw error;}
+    finally{await fs.unlink(temp).catch(()=>{});}
+    plan=await readRecord(file);
+  }
+  return plan?.token===token&&typeof plan.forced==='boolean'?plan:null;
+}
+const treeChecks=new Map(),treeRetryMs=3000;
+async function jobDescendants(owner,status,childPid,forced){
+  const scan=()=>traceWindowsDescendants(owner.pid,childPid,status.startedAt);
+  if(forced)return scan();
+  const cached=treeChecks.get(owner.token);
+  if(cached&&cached.until>performance.now())return cached.result;
+  if(treeChecks.size>=128)treeChecks.delete(treeChecks.keys().next().value);
+  const check={until:Infinity};
+  check.result=scan().then(descendants=>{
+    if(descendants?.length===0&&treeChecks.get(owner.token)===check)treeChecks.delete(owner.token);
+    check.until=performance.now()+treeRetryMs;
+    return descendants;
+  });
+  treeChecks.set(owner.token,check);
+  return check.result;
+}
+export async function reclaimJobWriter(root,scope,owner,{projectId=owner.projectId??scope,requestId=owner.requestId,forced=false}={}){
   const retained=reason=>({status:'retained',reason});
   if(owner.status==='owner-unknown')return retained('The current writer owner is unconfirmed');
   if(owner.kind!=='job'||owner.requestId!==requestId||(owner.projectId!==undefined&&owner.projectId!==projectId))return {status:'not-held',reason:'This job does not own the current writer'};
@@ -43,20 +80,41 @@ export async function reclaimJobWriter(root,scope,owner,{projectId=owner.project
   const [spec,status]=await Promise.all([readRecord(path.join(job,'request.json')),readRecord(path.join(job,'status.json'))]);
   if(spec?.project?.projectId!==projectId||spec.requestId!==requestId||status?.requestId!==requestId||status.runnerPid!==owner.pid||
     !['running','queued','interrupted'].includes(status.status))return retained('No matching interrupted job record could be confirmed');
-  if(Object.hasOwn(status,'childPid')){
-    const child=processPresence(status.childPid);
-    if(child!=='missing')return retained(child==='alive'?'The child PID is still present':'Child exit is unconfirmed');
+  const legacy=owner.projectId===undefined&&owner.runnerToken===undefined;
+  if(legacy?(scope!==projectId||status.writerScope!==undefined||status.childLaunch!==undefined):
+    (!owner.runnerToken||owner.runnerToken!==status.runnerToken||owner.projectId!==projectId||status.writerScope!==scope))
+    return retained('The job has no proof of matching writer ownership');
+  const hasChildPid=Object.hasOwn(status,'childPid'),childPid=status.childPid;
+  const beforeLaunch=!legacy&&status.childLaunch==='not-started'&&!hasChildPid;
+  let descendants;
+  if(forced||!beforeLaunch){
+    if(!forced){
+      const child=processPresence(childPid);
+      if(hasChildPid&&child!=='missing')return retained(child==='alive'?'The child PID is still present':'Child exit is unconfirmed');
+      if(!hasChildPid||childPid===owner.pid||(!legacy&&status.childLaunch!=='possible'))
+        return retained('The job has no proof that its child process tree ended');
+      if(!Number.isFinite(Date.parse(status.startedAt)))return retained('The job has no proof of when its child process tree started');
+    }
+    descendants=await jobDescendants(owner,status,validProbePid(childPid)?childPid:undefined,forced);
+    if(!forced){
+      if(!descendants)return retained('Windows process enumeration could not confirm child tree exit');
+      if(descendants.length)return retained('A traceable descendant is still present');
+      if(processPresence(childPid)!=='missing')return retained('Child exit is unconfirmed');
+    }
+    if(processPresence(owner.pid)!=='missing')return retained('Runner exit is unconfirmed');
   }
-  if(!owner.runnerToken||owner.runnerToken!==status.runnerToken||owner.projectId!==projectId||status.writerScope!==scope||
-    status.childLaunch!=='not-started'||Object.hasOwn(status,'childPid'))return retained('The job has no proof that its child process tree never started');
 
-  const current=await writerStatus(root,scope).catch(()=>null);
-  if(current?.kind!=='job'||current.token!==owner.token)return retained('Writer ownership changed before reclamation');
   try{
+    const plan=await prepareRecovery(job,owner.token,forced);
+    if(!plan)return retained('Writer reclamation decision could not be confirmed');
+    const current=await writerStatus(root,scope).catch(()=>null);
+    if(current?.kind!=='job'||current.token!==owner.token)return retained('Writer ownership changed before reclamation');
     // The nonempty destination stays with the job. If another process wins,
     // a late rename cannot overwrite it or move a new writer into its place.
     await fs.rename(directory(root,scope),recoveryDirectory(job));
-    return {status:'released'};
+    return {status:'released',...(forced?{
+      forced:plan.forced,processTree:descendants?'observed':'unconfirmed',descendants:descendants??[],
+    }:{})};
   }catch{
     const released=await readRecord(path.join(recoveryDirectory(job),'owner.json'));
     if(released?.token===owner.token)return {status:'already-released'};
@@ -69,7 +127,7 @@ export async function acquireWriter(root,id,{kind='operation',requestId,job,wait
     if(await isCancelled())throw Object.assign(new Error('Cancelled while waiting for the project writer'),{code:'CANCELLED'});
     try{await fs.mkdir(dir);break;}catch(e){if(e.code!=='EEXIST')throw e;}
     const owner=await writerStatus(root,id);
-    if(owner.kind==='job'&&owner.runnerToken){
+    if(owner.kind==='job'){
       const recovery=await reclaimJobWriter(root,id,owner);
       if(['released','already-released'].includes(recovery.status))continue;
     }

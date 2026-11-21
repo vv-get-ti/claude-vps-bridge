@@ -178,7 +178,7 @@ async function artifact(info, ctx, file) {
 }
 async function jobStatus(directory,{includeLogs=true,confirmExit=false}={}) {
   const value = await json(path.join(directory,'status.json')).catch(e=>e.code==='ENOENT'?{status:'starting'}:Promise.reject(e));
-  const recovery=value.childLaunch==='not-started'?await writerRecovery(directory):null;
+  const recovery=value.runnerPid&&['running','queued','interrupted'].includes(value.status)?await writerRecovery(directory,value):null;
   if(recovery){
     value.status='interrupted';value.error='Local task runner exited; no replay was submitted';value.writerRecovery=recovery;
   }else if (['running','queued','unresponsive'].includes(value.status) && value.runnerPid) {
@@ -342,17 +342,17 @@ export async function handle(request){
       const directory=path.join(state,'jobs',info.projectId,safeId(request.requestId));
       await fs.access(path.join(directory,'request.json')).catch(()=>fail('JOB_NOT_FOUND','No task with this request ID exists in this project'));
       if(request.operation==='output'){const status=await jobStatus(directory,{includeLogs:false});data=await readJobOutput(directory,{...request,complete:['succeeded','failed','cancelled','interrupted'].includes(status.status)});break;}
-      const cancelling=request.operation==='cancel';
-      if(cancelling)await fs.writeFile(path.join(directory,'cancel'),'cancel');
-      const deadline=Date.now()+Math.min(30000,Math.max(0,Number(request.waitMs)||0));
+      const cancelling=request.operation==='cancel',forced=request.forceReleaseWriter===true;
+      if(cancelling&&!forced)await fs.writeFile(path.join(directory,'cancel'),'cancel');
+      const deadline=Date.now()+(forced?0:Math.min(30000,Math.max(0,Number(request.waitMs)||0)));
       do{data=await jobStatus(directory,{confirmExit:cancelling});if(!['running','starting','queued'].includes(data.status)||Date.now()>=deadline)break;await sleep(150);}while(true);
-      if(cancelling&&['interrupted','unresponsive'].includes(data.status)){
+      if(forced||cancelling&&['interrupted','unresponsive'].includes(data.status)){
         let recovery={status:'already-released'};
         if(!data.writerRecovery){
           const spec=await json(path.join(directory,'request.json'));
           const scope=/^[a-f0-9]{64}$/.test(data.writerScope??'')?data.writerScope:await writerScope(state,info.projectId,spec.parentThread);
           const owner=await writerStatus(state,scope).catch(()=>({status:'owner-unknown'}));
-          recovery=await reclaimJobWriter(state,scope,owner,{projectId:info.projectId,requestId:request.requestId});
+          recovery=await reclaimJobWriter(state,scope,owner,{projectId:info.projectId,requestId:request.requestId,forced});
           data=await jobStatus(directory,{confirmExit:true});
         }
         data.writerReclaim=data.writerRecovery&&recovery.status!=='released'?{status:'already-released'}:recovery;
