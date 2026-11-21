@@ -28,6 +28,17 @@ for resource in (extension['desktop']['script'], extension['desktop']['style'], 
         raise SystemExit('Missing extension file: extension/' + resource)
     if file.suffix in ('.js', '.mjs'):
         subprocess.run([node, '--check', str(file)], check=True, cwd=ROOT)
+# Host rejects images whose signature, size or count exceed the extension limits.
+images = [(extension['icon'], 128 * 1024)] if 'icon' in extension else []
+images += [(shot, 512 * 1024) for shot in extension.get('screenshots', [])]
+if len(extension.get('screenshots', [])) > 4:
+    raise SystemExit('At most 4 extension screenshots are allowed')
+for resource, limit in images:
+    data = (EXTENSION / resource).read_bytes()
+    if not resource.lower().endswith('.png') or not data.startswith(b'\x89PNG\r\n\x1a\n') or len(data) > limit:
+        raise SystemExit('Extension image must be a PNG within ' + str(limit // 1024) + ' KiB: extension/' + resource)
+if sum(len((EXTENSION / s).read_bytes()) for s in extension.get('screenshots', [])) > 2 * 1024 * 1024:
+    raise SystemExit('Extension screenshots exceed 2 MiB in total')
 
 manifest = json.loads((PLUGIN / 'manifest.json').read_text(encoding='utf-8'))
 for field in ('entry', 'icon'):

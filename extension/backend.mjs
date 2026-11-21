@@ -9,8 +9,11 @@ import path from 'node:path';
 import {randomUUID} from 'node:crypto';
 
 const API_VERSION=1;
-const METHODS=new Set(['info','sessions.list','sessions.archive','sessions.restore','sessions.delete']);
-const MUTATING=new Set(['sessions.archive','sessions.restore','sessions.delete']);
+// The bridge validates every request itself; this list only bounds what the UI may ask for.
+const METHODS=new Set(['info','sessions.list','sessions.archive','sessions.restore','sessions.delete',
+  'bridge.status','storage.plan','storage.clean','relays.list','claude.status','claude.update']);
+// Writes run one at a time and are never killed by a timeout.
+const MUTATING=new Set(['sessions.archive','sessions.restore','sessions.delete','storage.clean','claude.update']);
 const MAX_REQUEST_BYTES=1024*1024;      // admin.mjs reads at most 1 MiB
 const MAX_OUTPUT_BYTES=64*1024*1024;
 const CHUNK_CHARS=256*1024;             // stays under the 2 MiB IPC cap even when escaped

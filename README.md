@@ -22,7 +22,7 @@ Claude VPS Bridge 是一个 [CodexHost](https://github.com/BytePioneer-AI/codex-
 - **继续原来的工作**：打开原聊天即可续接远端会话，也可以 fork 出新的聊天分支。需要并行改代码时可使用 Git worktree。
 - **处理文件与附件**：将图片和 PDF 交给 Claude；视频等任务由 Claude 自行选择本机工具处理，生成的文件保存在本机。
 - **查看账号额度**：在 CodexHost 中查看用量与重置时间。
-- **管理 VPS 会话**：查看、归档、恢复和永久删除 VPS 上的 Claude 会话，也可以在 CodexHost 的导入界面里导入已有会话；可选的 Desktop 扩展提供设置页面。
+- **管理 VPS 会话**：查看、归档、恢复和永久删除 VPS 上的 Claude 会话，也可以在 CodexHost 的导入界面里导入已有会话；清理孤立的缓存，检查并更新 VPS 上的 Claude Code。可选的 Desktop 扩展提供设置页面和侧栏连接状态。
 
 支持 CodexHost 的 Agent 协作，也可按需接入本机 MCP 工具。
 
