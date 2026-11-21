@@ -2,7 +2,7 @@
   "manifestVersion": 1,
   "id": "claude-vps-sessions",
   "name": { "en": "Claude VPS Sessions", "zh-CN": "Claude VPS 会话管理" },
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": {
     "en": "Manage Claude Code sessions and storage on the VPS used by Claude VPS Bridge, and see the connection status in the sidebar.",
     "zh-CN": "管理 Claude VPS Bridge 所用 VPS 上的 Claude Code 会话与存储，并在侧栏显示连接状态。"
