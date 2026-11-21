@@ -20,6 +20,12 @@ import {SessionChannel,SessionRequests} from './runtime/session-buffer.mjs';
 import {SessionReads} from './runtime/session-reads.mjs';
 const SHARED_READS=new Set(['inspect','snapshot','capabilities','commands-list','background-status']);
 const ID = 'claude-vps';
+// The official adapter catalog lives on the VPS; draft inspection stays local.
+const commandCatalog={commands:[{
+  id:'claude.compact',invocation:'/compact',label:'Compact context',
+  description:'Compact the current conversation context',argumentMode:'text',
+  localizations:{'zh-CN':{label:'压缩上下文',description:'压缩当前对话上下文'}},
+}]};
 const RUNTIME = path.join(path.dirname(fileURLToPath(import.meta.url)), 'runtime');
 const EXPORT = path.join(RUNTIME,'Export-CodexHostBridgeContext.ps1');
 
@@ -27,12 +33,44 @@ const exec = promisify(execFile);
 function remap(value, from, to) {
   if (Array.isArray(value)) return value.map(x => remap(x, from, to));
   if (!value || typeof value !== 'object') return value;
-  return Object.fromEntries(Object.entries(value).map(([k,v]) => [k, k === 'harnessId' && v === from ? to : remap(v, from, to)]));
+  return Object.fromEntries(Object.entries(value).map(([k,v]) => {
+    // Item payloads and updates can contain arbitrary tool data, including harnessId keys.
+    if(k==='item'||k==='update')return [k,v];
+    return [k,k==='harnessId'&&v===from?to:remap(v,from,to)];
+  }));
 }
 export function createHarnessAdapter(context) {
   // Lets diagnose tell whether this Host process runs the installed code.
   void recordLoadedInstall(path.join(RUNTIME,'state')).catch(()=>{});
-  let accountSnapshot=null,accountPending=null,accountRefreshAfter=0;
+  const account={snapshot:null};
+  let current=createConnectionAdapter(context,account),closed=false;
+  function active(){
+    if(!closed&&current.replaced)current=createConnectionAdapter(context,account);
+    return current;
+  }
+  return {
+    harnessId:ID,
+    commandCatalog,
+    async inspect(input){
+      const connection=active();
+      const result=await connection.adapter.inspect(input);
+      // Independent catalog reads may cross this boundary once. Session
+      // handles and in-flight writes keep their original transport forever.
+      if(result?.status==='unavailable'&&connection.replaced&&!closed&&!input?.signal?.aborted){
+        return active().adapter.inspect(input);
+      }
+      return result;
+    },
+    open:(...args)=>active().adapter.open(...args),
+    inspectAccount:()=>active().adapter.inspectAccount(),
+    credits:()=>current.adapter.credits(),
+    refreshCredits:()=>active().adapter.refreshCredits(),
+    close(){closed=true;return current.adapter.close();},
+  };
+}
+
+function createConnectionAdapter(context,account) {
+  let accountPending=null,accountRefreshAfter=0;
   const channels=new Map(), localBindings=new Map();
   const reads=new SessionReads((...args)=>transport.rpc(...args));
   const controlActions=new Set(['bind','turn','prepare-turn','prepare-steer','events','history-events','cancel-jobs','environment','permission','capability-context','attachments','lifecycle','preflight','media-export','mcp']);
@@ -92,7 +130,10 @@ export function createHarnessAdapter(context) {
     turnNotice(text);
     for(const channel of channels.values()){channel.push({kind:'event',event:{type:'session.faulted',error:errorResult(text).error}});channel.end();} channels.clear();
     // The transport still owns pending failures, including relay replacement.
-    for(const sessionId of localBindings.keys())reads.forget(sessionId);
+    for(const sessionId of localBindings.keys()){
+      reads.forget(sessionId);
+      if(transport.fatalError?.code==='REMOTE_RELAY_REPLACED')closeMcpSession(sessionId);
+    }
     localBindings.clear();
   }
   const transport=new SshTransport({
@@ -135,9 +176,9 @@ export function createHarnessAdapter(context) {
   }
   async function readAccount(force=false){
     if(accountPending)return accountPending;
-    if(!force&&Date.now()<accountRefreshAfter)return accountSnapshot;
+    if(!force&&Date.now()<accountRefreshAfter)return account.snapshot;
     accountPending=(async()=>{
-      try{const value=await rpc('account',{},11000);if(value!==null&&typeof value==='object'){accountSnapshot=value;accountRefreshAfter=Date.now()+60000;return value;}accountRefreshAfter=Date.now()+15000;return null;}
+      try{const value=await rpc('account',{},11000);if(value!==null&&typeof value==='object'){account.snapshot=value;accountRefreshAfter=Date.now()+60000;return value;}accountRefreshAfter=Date.now()+15000;return null;}
       catch{accountRefreshAfter=Date.now()+15000;return null;}
       finally{accountPending=null;}
     })();
@@ -151,7 +192,7 @@ export function createHarnessAdapter(context) {
     // The composer ring reads these separate optional APIs synchronously.
     // Keep the last observed quota while refreshing, including across resets.
     // Only an account object replaces it. Null and failures preserve the snapshot.
-    credits(){return accountSnapshot?.credits??null;},
+    credits(){return account.snapshot?.credits??null;},
     async refreshCredits(){await readAccount();return adapter.credits();},
     async inspect(input={}){try{return await rpc('inspect',{refresh:input.refresh,purpose:input.purpose},undefined,input.signal);}catch(error){return {status:'unavailable',error:errorResult(error.message).error};}},
     async open(input,options){
@@ -299,5 +340,8 @@ export function createHarnessAdapter(context) {
     },
     async close(){for(const [id,binding] of localBindings){binding.readLifetime.abort();closeMcpSession(id);}reads.close();await transport.close();for(const c of channels.values())c.end();},
   };
-  return adapter;
+  return {
+    adapter,
+    get replaced(){return Boolean(transport.epoch)&&transport.fatalError?.code==='REMOTE_RELAY_REPLACED';},
+  };
 }

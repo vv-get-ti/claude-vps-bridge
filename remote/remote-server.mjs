@@ -21,6 +21,8 @@ const ingress = process.argv[2] === '--ssh-ingress'
   : {kind:'unknown',process:null};
 import {loadClaudeAdapter} from './adapter-loader.mjs';
 const {createHarnessAdapter,dependencyVersion,adapterSha256} = await loadClaudeAdapter();
+const [dependencyMajor,dependencyMinor]=dependencyVersion.split('.').map(Number);
+const nativeImageInput=dependencyMajor>0||(dependencyMajor===0&&dependencyMinor>=22);
 const {version:bridgeVersion}=JSON.parse(await readFile(path.join(bridgeRoot,'bridge-manifest.json'),'utf8'));
 const adapter = await createHarnessAdapter({ environment: { ...process.env, CODEXHOST_CLAUDE_COMMAND: path.join(bridgeRoot,'claude-windows') }, platform: 'linux', managedRemoteHost: false });
 const sessions = new Map();
@@ -51,7 +53,6 @@ async function cacheUsage(binding,usage){
   }
   return merged.usage;
 }
-const displayedText = new Map();
 const localPending = new Map();
 const controlEpoch=randomUUID();let controlNo=0;
 function assertOpening(binding){if(binding.openingState?.cancelled)throw Object.assign(new Error('Session open was cancelled; no late session was accepted'),{code:'OPEN_CANCELLED'});}
@@ -119,6 +120,30 @@ async function localMedia(binding,file){
   const env={...process.env,...binding.toolEnvironment,WINDOWS_PROJECT_CWD:binding.localCwd,WINDOWS_PROJECT_ID:binding.projectId,WINDOWS_BRIDGE_SESSION:binding.sessionId,WINDOWS_MEDIA_SESSION:binding.mediaKey};
   const {stdout}=await exec(workspaceCommand,[JSON.stringify({action:'media',path:file})],{env,timeout:90000,maxBuffer:2*1024*1024});return JSON.parse(stdout);
 }
+async function withTurnMedia(binding,command,context,attachments=[]){
+  if(attachments.length)await localControl(binding,'attachments',{paths:attachments});
+  const images=new Map();
+  for(const file of attachments){
+    let media;
+    try{media=await localMedia(binding,file);}
+    catch(error){
+      send({timing:{phase:'attachment-cache',status:'unavailable',code:error.code??'UNKNOWN'}});
+      media={source:file,files:[],note:'The attachment could not be cached. Its original path remains on Windows; use Windows workspace tools if access is needed.'};
+    }
+    const cached=media.kind==='image'&&media.files?.[0];
+    // The native list uses single lines and a colon-space path separator.
+    if(nativeImageInput&&cached&&path.isAbsolute(cached.path)&&!/[\x00-\x1f\x7f]|: /.test(cached.path)){
+      if(!images.has(cached.sha256))images.set(cached.sha256,cached.path);
+      // The adapter decides which candidates produce blocks, including on steer.
+      media={...media,note:'Use the attached image block when available. Use native Read on the cached path only if its image block is unavailable. Identical SHA-256 values refer to the same image.'};
+    }
+    context.push('Explicitly attached local media:\n'+JSON.stringify(media));
+  }
+  // End the native attachment list before any project rules, hooks or user text.
+  if(images.size)context.unshift('# Files mentioned by the user:\n\n'+
+    [...images.values()].map(file=>'## '+path.basename(file)+': '+file+'\nImage attachment: true').join('\n\n'),'## My request:');
+  return {...command,input:[{type:'text',text:context.join('\n\n')},...command.input]};
+}
 // Native Codex shows a file change where it happens in the turn; the host adds
 // its own summary card at the end. Send the card as soon as the write returns.
 function changeItemId(record){return record.id?'windows-change-'+record.id:'windows-'+createHash('sha256').update(JSON.stringify(record)).digest('hex').slice(0,24);}
@@ -145,10 +170,11 @@ async function presentation(sessionId, output) {
   const binding=bindings.get(sessionId);
   if(!binding || output.kind!=='event')return;
   const event=output.event;
-  const key=sessionId+':'+event.turnId;
   // This is only a duplicate-preview hint, not conversation history. Native
   // history retains the complete answer even when this bounded tail rolls.
-  if(event.type==='item.completed'&&event.snapshot.item.type==='agentMessage')displayedText.set(key,((displayedText.get(key)??'')+'\n'+event.snapshot.item.text).slice(-128*1024));
+  if(event.type==='item.completed'&&event.turnId===binding.activeTurn&&event.snapshot.item.type==='agentMessage'){
+    binding.displayedText=((binding.displayedText??'')+'\n'+event.snapshot.item.text).slice(-128*1024);
+  }
   if(event.type!=='turn.completed')return;
   // Codex marks the last plain agent message of a succeeded turn as the final
   // answer. Trailing bridge text would demote Claude's answer, so only facts
@@ -156,7 +182,7 @@ async function presentation(sessionId, output) {
   if(binding.cancelResult){const cancelled=await binding.cancelResult;delete binding.cancelResult;const stopped=cancelled.ok?cancelled.jobs.filter(j=>j.status==='cancelled').length:0;const text=!cancelled.ok?'本机任务可能仍在运行：'+cancelled.error:stopped?'已停止 '+stopped+' 个本机任务。':'';if(text)emitItems(sessionId,event.turnId,[{item:{type:'agentMessage',itemId:'windows-cancel-'+event.turnId,phase:'commentary',text},outcome:{status:'succeeded'}}]);}
   try{await localControl(binding,'lifecycle',{event:'Stop',payload:{stop_hook_active:false}});}catch(error){emitItems(sessionId,event.turnId,[{item:{type:'agentMessage',itemId:'windows-stop-hook-'+event.turnId,phase:'commentary',text:'本机 Stop hook 出错：'+error.message},outcome:{status:'succeeded'}}]);}
   const file=event.nativeTurnRef?presentationFile(binding,event.nativeTurnRef):null;
-  const extra={source:{localCwd:binding.localCwd,projectId:binding.projectId,sessionId:binding.sessionId,parentThread:binding.parentThread,remoteCwd:binding.remoteCwd,duplexControl:false,turnId:event.turnId},pending:true,items:[],displayedText:displayedText.get(key)??''};displayedText.delete(key);
+  const extra={source:{localCwd:binding.localCwd,projectId:binding.projectId,sessionId:binding.sessionId,parentThread:binding.parentThread,remoteCwd:binding.remoteCwd,duplexControl:false,turnId:event.turnId},pending:true,items:[],displayedText:binding.displayedText??''};delete binding.displayedText;
   try{
     if(file)await saveJson(file,extra);
     extra.items=presentationItems(await localControl(binding,'events',{turnId:event.turnId}),binding,event.turnId,extra.displayedText);
@@ -317,7 +343,7 @@ async function request(method, params, signal) {
     void (async () => {
       try { for await (let output of s.outputs) {
         if(output.kind==='event'){
-          if(output.event.type==='turn.started')binding.activeTurn=output.event.turnId;
+          if(output.event.type==='turn.started'){binding.activeTurn=output.event.turnId;delete binding.displayedText;}
           if(output.event.type==='item.completed'&&output.event.snapshot.item.type==='contextCompaction')binding.contextState=null;
         }
         if(output.kind==='event'&&output.event.type==='session.usage.changed')output={...output,event:{...output.event,usage:await cacheUsage(binding,output.event.usage)}};
@@ -374,12 +400,11 @@ async function request(method, params, signal) {
         if(capabilities.steer!==true)return reject('远端 Claude 当前未确认可接收运行中追加指令。');
         const prompt=command.input.filter(i=>i.type==='text').map(i=>i.text).join('\n');
         const {environment,hooks}=await localControl(binding,'prepare-steer',{turnId:command.turnId,prompt});
-        if(params.attachments?.length){await localControl(binding,'attachments',{paths:params.attachments});}
-        const media=[];for(const file of params.attachments??[])media.push('Explicitly attached local media:\n'+JSON.stringify(await localMedia(binding,file)));
+        const context=['Current workspace permission mode: '+binding.permissionMode,environment.text,...hooks.map(h=>h.hookSpecificOutput?.additionalContext??h.additionalContext??'')].filter(Boolean);
+        command=await withTurnMedia(binding,command,context,params.attachments);
         if(binding.activeTurn!==command.turnId)return reject('准备追加指令时原轮次已结束；未提交，请确认后发送新消息。');
-        const context=[environment.text,'Current workspace permission mode: '+binding.permissionMode,...hooks.map(h=>h.hookSpecificOutput?.additionalContext??h.additionalContext??''),...media].filter(Boolean).join('\n\n');
         // Native adapter performs the final active-turn/race check; never retry as turn.start.
-        return await executeNative({...command,input:[{type:'text',text:context},...command.input]});
+        return await executeNative(command);
       }
       if(command.type==='turn.start'){
         const prompt=command.input.filter(i=>i.type==='text').map(i=>i.text).join('\n');
@@ -388,13 +413,12 @@ async function request(method, params, signal) {
         else{await localControl(binding,'turn',{turnId:command.turnId});environment=await localControl(binding,'environment');hooks=await localControl(binding,'lifecycle',{event:'UserPromptSubmit',payload:{prompt}});}
         const update=contextUpdate(binding.contextState,environment);binding.pendingContext=update.state;
         send({timing:{phase:'context-injection',mode:update.mode,bytes:Buffer.byteLength(update.text),fullBytes:Buffer.byteLength(environment.text)}});
-        const context=[update.text,'Current workspace permission mode: '+binding.permissionMode,...[...(binding.startContext??[]),...hooks].map(h=>h.hookSpecificOutput?.additionalContext??h.additionalContext??'')];binding.startContext=[];
+        const context=['Current workspace permission mode: '+binding.permissionMode,update.text,...[...(binding.startContext??[]),...hooks].map(h=>h.hookSpecificOutput?.additionalContext??h.additionalContext??'')];binding.startContext=[];
         const slash=prompt.match(/^\s*\/([\w-]+)(?:\s+([\s\S]*))?$/);
         if(slash){const item=environment.capabilities.find(c=>['skill','command'].includes(c.kind)&&c.name===slash[1]);if(item){const value=await localControl(binding,'capability-context',{id:item.id});context.push('User explicitly invoked '+item.id+':\n'+value.content.replaceAll('$ARGUMENTS',slash[2]??''));command={...command,input:[{type:'text',text:'Execute the explicitly invoked local capability '+item.id+'. Arguments: '+(slash[2]??'')}]};}}
         const pending=(environment.jobs??[]).filter(j=>['starting','queued','running','unresponsive','interrupted'].includes(j.status));
         if(pending.length)context.push('Existing local tasks; query these IDs, never resubmit uncertain work:\n'+JSON.stringify(pending.map(({requestId,status,cwd,startedAt})=>({requestId,status,cwd,startedAt}))));
-        if(params.attachments?.length){await localControl(binding,'attachments',{paths:params.attachments});for(const file of params.attachments){const media=await localMedia(binding,file);context.push('Explicitly attached local media (cached images/PDFs use native Read; local video remains a Windows file):\n'+JSON.stringify(media));}}
-        command={...command,input:[{type:'text',text:context.join('\n\n')},...command.input]};
+        command=await withTurnMedia(binding,command,context,params.attachments);
         const notice=contextNotice(binding.noticeState,environment);
         binding.contextNotice={...notice,turnId:command.turnId,items:notice.text?[{item:{type:'agentMessage',itemId:'windows-context-'+command.turnId,phase:'commentary',text:notice.text},outcome:{status:'succeeded'}}]:[]};
       }

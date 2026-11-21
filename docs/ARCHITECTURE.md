@@ -68,7 +68,7 @@ SSH 线路由 `plugin/runtime/ssh-routes.mjs` 统一校验和选择，所有发�
 
 ## 宿主接口
 
-插件通过公开 Harness adapter 的 `open`、`execute`、`outputs`、`readCapabilities`、历史与用量接口连接宿主，通过公开 CLI 进行委派。安装只更新插件目录与启用列表；不改写、不加载宿主 bundle，也不读取宿主内部 mapping-store。
+插件通过公开 Harness adapter 的 `open`、`execute`、`outputs`、`readCapabilities`、历史与用量接口连接宿主，通过公开 CLI 进行委派。静态 `commandCatalog` 只列出桥接实际放行的命令（目前为 `/compact`），宿主在草稿中读取它时不建立 SSH 连接、不打开会话。转发事件时只转换协议层的会话引用、轮次引用和检查点的 Harness 身份，条目与更新载荷（含 MCP 工具参数）原样保留，未知条目类型直接透传。安装只更新插件目录与启用列表；不改写、不加载宿主 bundle，也不读取宿主内部 mapping-store。
 
 VPS 依赖跟随官方 `@codexhost/cli` 的 latest 发布，最低版本见 `installer/dependency-policy.json`。新版本先装到临时目录，通过检查后才可被选用，不通过则保留当前版本。准备、部署和升级检查共用一个入口，核对包名与版本、适配器入口、`createHarnessAdapter` 和适配器 SHA256；health 同时返回依赖版本、适配器哈希、插件版本与协议，安装校验逐项比对。插件版本只来自 `plugin/manifest.json`。
 
@@ -78,7 +78,7 @@ VPS 依赖跟随官方 `@codexhost/cli` 的 latest 发布，最低版本见 `ins
 
 `windows-workspace` 每个 action 的允许字段、类型和必填项由 `plugin/runtime/workspace-request-schema.json` 统一定义。VPS 端提前校验，Windows 端在权限与业务处理前权威校验；未知字段直接报错并列出允许字段，不再被静默忽略。`agent` 通道中，桥接需要读取任务身份和终态的命令（`delegate start`、`thread send/read/wait`）不会以 text 格式执行，CLI 成功与否只由退出码决定。
 
-公开接口提供的结构化附件在本机保留来源身份，传给远端前单独提取精确路径；普通正文中的路径、代码示例和 Markdown 链接不产生附件授权。纯文本入口按上游 Desktop 附件清单的语法解析：标题开始一份文件清单，隔离提示行结束它，远程准备前置的清单可以再开始一份；图片与文档可以混排，只发图片时没有请求标题也能识别；清单之外的条目一律视为正文。纯文本入口本身没有独立的来源字段。UNC 和扩展 Windows 路径按同一规则处理。内联图片原样落盘，本机接收上限与远端单次传输上限分开；大于 5 MiB 的本机图片/PDF以路径与大小描述交给 Claude，不自动转换或阻断整轮。
+公开接口提供的结构化附件在本机保留来源身份，传给远端前单独提取精确路径；普通正文中的路径、代码示例和 Markdown 链接不产生附件授权。纯文本入口按上游 Desktop 附件清单的语法解析：标题开始一份文件清单，隔离提示行结束它，远程准备前置的清单可以再开始一份；图片与文档可以混排，只发图片时没有请求标题也能识别；清单之外的条目一律视为正文。纯文本入口本身没有独立的来源字段。官方适配器（0.22.0 起）只解析提示词开头的 Desktop 附件清单，并在适配器所在机器上读取其中的图片路径；因此远端在提交前，把本轮已授权并缓存到 VPS 的图片按同一清单格式置于提示词开头，项目上下文、Hook 输出和用户原文都在 `## My request:` 之后。是否生成原生图片块、轮次中追加的尺寸与大小限制都由官方转换函数判定，桥接不另设阈值；未能生成图片块的图片仍可用缓存路径和原生 Read 读取。Windows 原路径、缓存路径、大小与哈希保留在模型可见的说明中。UNC 和扩展 Windows 路径按同一规则处理。内联图片原样落盘，本机接收上限与远端单次传输上限分开；大于 5 MiB 的本机图片/PDF以路径与大小描述交给 Claude，不自动转换或阻断整轮。
 
 模型观测来自远端 `usage.request.model`，按本机会话和轮次保存到插件自己的 `runtime/state/models`。目录默认与 requested/effective model 只作为配置选择；思考 Auto 不证明某一请求的实际模型。提示词缓存只保存上游已给出的绝对到期时间，位于远端工作区根下 `.bridge-cache`，按原生会话及项目绑定，不跨项目复用。
 
