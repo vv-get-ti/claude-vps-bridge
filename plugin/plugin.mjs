@@ -18,6 +18,7 @@ import {getBridgeConfig} from './runtime/bridge-config.mjs';
 import {createBridgePreflight} from './runtime/bridge-preflight.mjs';
 import {SessionChannel,SessionRequests} from './runtime/session-buffer.mjs';
 import {SessionReads} from './runtime/session-reads.mjs';
+import {createSessionImport,rememberNativeBinding} from './runtime/session-admin.mjs';
 const SHARED_READS=new Set(['inspect','snapshot','capabilities','commands-list','background-status']);
 const ID = 'claude-vps';
 // The official adapter catalog lives on the VPS; draft inspection stays local.
@@ -27,6 +28,7 @@ const commandCatalog={commands:[{
   localizations:{'zh-CN':{label:'压缩上下文',description:'压缩当前对话上下文'}},
 }]};
 const RUNTIME = path.join(path.dirname(fileURLToPath(import.meta.url)), 'runtime');
+const STATE = path.join(RUNTIME,'state');
 const EXPORT = path.join(RUNTIME,'Export-CodexHostBridgeContext.ps1');
 
 const exec = promisify(execFile);
@@ -51,6 +53,7 @@ export function createHarnessAdapter(context) {
   return {
     harnessId:ID,
     commandCatalog,
+    sessionImport:createSessionImport({getConfig:getBridgeConfig,state:STATE,projectInfo:cwd=>projectInfo(cwd,{readOnly:true})}),
     async inspect(input){
       const connection=active();
       const result=await connection.adapter.inspect(input);
@@ -214,6 +217,8 @@ function createConnectionAdapter(context,account) {
         const opened=await rpc('open',{sessionId,input:safeInput,localCwd:input.cwd,parentThread:parent,workspace,localFeatures:['prepare-turn'],localControl:health.capabilities.includes('duplex-control'),localTools:health.capabilities.includes('duplex-tools')},input.kind==='fork'?180000:60000,options?.signal??signal);
         if(!opened.ok){channel.end();channels.delete(sessionId);localBindings.delete(sessionId);return opened;}
         const metadata=opened.value;
+        if(parent)await rememberNativeBinding(STATE,metadata.nativeWriterRef?.nativeSessionId,parent,workspace.projectId)
+          .catch(()=>timing({phase:'native-binding',status:'save-failed'}));
         const binding=localBindings.get(sessionId);binding.nativeState??=metadata.initialState;
         binding.closedSignal=new Promise(resolve=>{binding.confirmClosed=resolve;});
         function hasBackgroundWork(){

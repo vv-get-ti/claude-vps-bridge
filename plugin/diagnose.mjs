@@ -7,7 +7,7 @@ import {promisify} from 'node:util';
 import {fileURLToPath,pathToFileURL} from 'node:url';
 import {BRIDGE_PROTOCOL} from './bridge-protocol.mjs';
 import {attachmentNotice} from './runtime/input-boundary.mjs';
-import {validateConfig,shellQuote} from './runtime/bridge-config.mjs';
+import {loadBridgeConfig,shellQuote} from './runtime/bridge-config.mjs';
 import {SshRoutes,routeObservation} from './runtime/ssh-routes.mjs';
 import {activationStatus,readStamp} from './runtime/activation.mjs';
 
@@ -113,9 +113,8 @@ export async function diagnose({root=here,installedRoot=path.join(os.homedir(),'
   const add=(stage,status,details={},required=false)=>checks.push({stage,status,required,...details});
   const source=await json(path.join(root,'manifest.json')).catch(()=>null),installed=await json(path.join(installedRoot,'manifest.json')).catch(()=>null);
   add('versions','info',{source:version(source?.version),installed:version(installed?.version),desktopLoadedVersion:'unverified'});
-  const candidates=configFile?[configFile]:[path.join(root,'bridge-config.json'),path.join(root,'bridge-config.local.json'),path.join(installedRoot,'bridge-config.json')];
   let config;
-  try{const selected=await Promise.all(candidates.map(exists)).then(found=>candidates[found.indexOf(true)]);if(!selected)throw Error('Missing configuration');config=validateConfig(await json(selected));add('configuration','ok',{},true);}
+  try{config=loadBridgeConfig({root,installedRoot,configFile});add('configuration','ok',{},true);}
   catch{add('configuration','unavailable',{reason:'missing-or-invalid',next:'Configure the bridge or set CLAUDE_VPS_CONFIG to your private configuration file.'},true);}
   const runtime=installed?'installed':'source'; // label only; never expose installation paths
   const target=installed?installedRoot:root,state=path.join(target,'runtime','state');

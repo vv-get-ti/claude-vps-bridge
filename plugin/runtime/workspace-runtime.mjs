@@ -48,13 +48,15 @@ async function atomic(file, value) {
   try { await next; } finally { if (writeChains.get(file) === next) writeChains.delete(file); }
 }
 function safeId(value) { if (typeof value !== 'string' || !/^[a-zA-Z0-9_-]{1,100}$/.test(value)) fail('INVALID_ID', 'Identifiers may contain only letters, digits, - and _ (1-100 characters)'); return value; }
-export async function projectInfo(cwd) {
+export async function projectInfo(cwd, {readOnly=false}={}) {
   if (!path.win32.isAbsolute(cwd)) fail('INVALID_PROJECT', 'Select an absolute Windows project directory');
   const real = await fs.realpath(cwd).catch(() => fail('PROJECT_MISSING', 'The selected Windows project does not exist'));
   if (!(await fs.stat(real)).isDirectory()) fail('INVALID_PROJECT', 'The selected Windows project is not a directory');
-  await fs.mkdir(state, { recursive: true });
   const machineFile = path.join(state, 'machine-id');
-  try { await fs.writeFile(machineFile, randomUUID(), { flag: 'wx' }); } catch (e) { if (e.code !== 'EEXIST') throw e; }
+  if(!readOnly){
+    await fs.mkdir(state, { recursive: true });
+    try { await fs.writeFile(machineFile, randomUUID(), { flag: 'wx' }); } catch (e) { if (e.code !== 'EEXIST') throw e; }
+  }
   const machineId = (await fs.readFile(machineFile, 'utf8')).trim();
   const key = real.replace(/[\\/]+$/, '').toLowerCase();
   const projectId = hash(machineId + '\n' + key);

@@ -35,7 +35,7 @@ def main():
         journal['phase']='rolled-back';(stage/'journal.json').write_text(json.dumps(journal,indent=2));print(json.dumps({'rolledBack':True,'restartRequired':True}));return
     tx=datetime.datetime.now(datetime.timezone.utc).strftime('%Y%m%dT%H%M%S%fZ');stage=SOURCE/'transactions'/tx;stage.mkdir(parents=True)
     config=load_config();target=INSTALLED;hostRoot=Path(config['hostRoot']);node=hostRoot/'runtime/node.exe'
-    pairs=[(PLUGIN/n,target/n) for n in ('plugin.mjs','manifest.json','icon.svg','transport-streams.mjs','diagnose.mjs','maintenance.mjs')]
+    pairs=[(PLUGIN/n,target/n) for n in ('plugin.mjs','manifest.json','icon.svg','transport-streams.mjs','diagnose.mjs','maintenance.mjs','admin.mjs')]
     # Deploy the same policy and loader side by side at both flat runtime roots.
     protocol_files=('bridge-protocol.mjs','dependency-policy.json')
     pairs.extend((INSTALLER/name,target/name) for name in protocol_files)
@@ -68,7 +68,7 @@ def main():
         rows.append({'path':str(dest),'key':key,'beforeHash':sha(before) if before is not None else None,'sha256':sha(content) if content is not None else None})
         if content is not None and dest.suffix=='.mjs':
             check=stage/(key+'.mjs');check.write_bytes(content);subprocess.run([str(node),'--check',str(check)],check=True,capture_output=True)
-    names=('remote-config.mjs','bridge_paths.py','windows-agent','remote-server.mjs','mcp-local.py','remote-transport.mjs','transport-proxy.py','ssh_ingress.py','relay-lock.py','transport-streams.mjs','relay-ledger.mjs','relay-channel.mjs','tool-bridge.mjs','context-delta.mjs','context-notice.mjs','prompt-cache.mjs','compact-context.py','workspace-request.py','workspace-map.mjs','fork-state.mjs','workspace-guard.py','workspace-settings.json','bridge-instructions.md','claude-windows','media-transfer.py','adapter-loader.mjs','start-transport','check-health','windows-workspace')
+    names=('remote-config.mjs','bridge_paths.py','windows-agent','remote-server.mjs','mcp-local.py','remote-transport.mjs','transport-proxy.py','ssh_ingress.py','relay-lock.py','transport-streams.mjs','relay-ledger.mjs','relay-channel.mjs','tool-bridge.mjs','context-delta.mjs','context-notice.mjs','prompt-cache.mjs','compact-context.py','workspace-request.py','workspace-map.mjs','fork-state.mjs','workspace-guard.py','workspace-settings.json','bridge-instructions.md','claude-windows','media-transfer.py','adapter-loader.mjs','start-transport','check-health','windows-workspace','session-lease.mjs','session_lease.py','session_files.py','session_inventory.py','session-admin.py')
     payload={n:(REMOTE/n).read_text(encoding='utf8') for n in names}
     payload['bridge-manifest.json']=(PLUGIN/'manifest.json').read_text(encoding='utf-8')
     payload.update({name:(INSTALLER/name).read_text(encoding='utf-8') for name in protocol_files})
