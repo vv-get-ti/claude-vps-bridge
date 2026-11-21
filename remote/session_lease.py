@@ -18,7 +18,7 @@ UUID = re.compile(r'[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}\Z')
 
 
 @contextmanager
-def lock(path, *, shared=False, create=True):
+def lock(path, *, shared=False, create=True, yield_fd=False):
     try:
         with directory(path.parent, create) as parent:
             flags = os.O_NOFOLLOW | os.O_NONBLOCK | (os.O_CREAT | os.O_RDWR if create else os.O_RDONLY)
@@ -39,7 +39,7 @@ def lock(path, *, shared=False, create=True):
         except BlockingIOError:
             yield False
         else:
-            yield True
+            yield fd if yield_fd else True
     finally:
         os.close(fd)
 

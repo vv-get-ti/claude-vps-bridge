@@ -55,8 +55,7 @@ export async function listBindings(state){
   return {native,legacy,incomplete};
 }
 
-function onRoute(config,route,request,{spawnProcess,timeoutMs,mutating}){
-  const command='python3 -B '+shellQuote(config.remoteRoot+'/session-admin.py');
+function onRoute(config,route,command,request,{spawnProcess,timeoutMs,mutating}){
   return new Promise((resolve,reject)=>{
     const env={...process.env};for(const key of Object.keys(env))if(/ANTHROPIC|CLAUDE|CODEXHOST_RUNTIME|API_KEY|TOKEN|SECRET/i.test(key))delete env[key];
     const child=spawnProcess(config.sshExecutable,route.args(command,{connectTimeout:10}),{env,windowsHide:true,stdio:['pipe','pipe','pipe']});
@@ -89,8 +88,14 @@ function onRoute(config,route,request,{spawnProcess,timeoutMs,mutating}){
   });
 }
 
-export async function remoteSessionRequest(config,method,params,bindings,{spawnProcess=spawn,timeoutMs=120000}={}){
-  const mutating=method!=='sessions.list';
+export async function remoteAdminRequest(config,command,request,{spawnProcess=spawn,timeoutMs=120000,mutating=false}={}){
+  const routes=new SshRoutes(config);
+  return routes.firstAvailable(route=>onRoute(config,route,command,request,{spawnProcess,timeoutMs,mutating}),
+    error=>['SSH_UNAVAILABLE','ROUTE_HELPER_UNAVAILABLE'].includes(error.code));
+}
+
+export async function remoteSessionRequest(config,method,params,bindings,options={}){
+  const mutating=Object.hasOwn(params,'items');
   const request={method,params};
   if(method==='sessions.archive'&&!params.confirmBound){
     request.boundIds=params.items.map(item=>item.id).filter(id=>bindings.native.has(id));
@@ -98,8 +103,8 @@ export async function remoteSessionRequest(config,method,params,bindings,{spawnP
   }
   let reply;
   try{
-    const routes=new SshRoutes(config);
-    reply=await routes.firstAvailable(route=>onRoute(config,route,request,{spawnProcess,timeoutMs,mutating}),error=>['SSH_UNAVAILABLE','ROUTE_HELPER_UNAVAILABLE'].includes(error.code));
+    const command='python3 -B '+shellQuote(config.remoteRoot+'/session-admin.py');
+    reply=await remoteAdminRequest(config,command,request,{...options,mutating});
   }catch(error){
     const unknown=error.code==='RESULT_UNKNOWN';
     const code=unknown?'RESULT_UNKNOWN':'SSH_UNAVAILABLE';

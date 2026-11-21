@@ -19,6 +19,7 @@ import {createBridgePreflight} from './runtime/bridge-preflight.mjs';
 import {SessionChannel,SessionRequests} from './runtime/session-buffer.mjs';
 import {SessionReads} from './runtime/session-reads.mjs';
 import {createSessionImport,rememberNativeBinding} from './runtime/session-admin.mjs';
+import {createClaudeInstallation} from './runtime/claude-installation.mjs';
 const SHARED_READS=new Set(['inspect','snapshot','capabilities','commands-list','background-status']);
 const ID = 'claude-vps';
 // The official adapter catalog lives on the VPS; draft inspection stays local.
@@ -54,6 +55,7 @@ export function createHarnessAdapter(context) {
     harnessId:ID,
     commandCatalog,
     sessionImport:createSessionImport({getConfig:getBridgeConfig,state:STATE,projectInfo:cwd=>projectInfo(cwd,{readOnly:true})}),
+    installation:createClaudeInstallation(getBridgeConfig),
     async inspect(input){
       const connection=active();
       const result=await connection.adapter.inspect(input);
@@ -164,6 +166,7 @@ function createConnectionAdapter(context,account) {
       }
     },
     onState(state){if(state.route)void recordRouteState(path.join(RUNTIME,'state'),state).catch(()=>{});
+      if(state.heartbeat)return;
       if(['connecting','reconnecting','idle-restoring','unavailable'].includes(state.state)){preflight.invalidate();for(const binding of localBindings.values())invalidateBackground(binding);}timing({phase:'transport-state',...state});linkNotice(state);if(state.state==='unavailable')failed(state.message);}
   });
   const config=getBridgeConfig();

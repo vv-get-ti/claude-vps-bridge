@@ -45,8 +45,8 @@ def manifest_path(session_id):
     return ARCHIVE / session_id / 'manifest.json'
 
 
-def archive_manifest(session_id):
-    file = manifest_path(session_id)
+def archive_manifest(session_id, file=None):
+    file = file or manifest_path(session_id)
     try:
         value = read_json(file)
         require(entry(file.parent) is not None and value['version'] == 1 and value['id'] == session_id
@@ -345,6 +345,13 @@ def apply_item(method, item, request):
 
 def dispatch(request):
     method, params = request['method'], request['params']
+    if method in ('storage.plan', 'storage.clean'):
+        from storage_admin import storage_request
+        return storage_request(method, params, archive_manifest)
+    if method == 'relays.list':
+        from relay_inventory import list_relays
+        require(params == {}, 'INVALID_ARGUMENT')
+        return list_relays()
     if method == 'sessions.list':
         require(params['scope'] in ('active', 'archived'), 'INVALID_ARGUMENT')
         return list_sessions(params)

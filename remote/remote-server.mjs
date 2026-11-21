@@ -56,6 +56,13 @@ async function cacheUsage(binding,usage){
   return merged.usage;
 }
 const localPending = new Map();
+const activeRequests=new Map();
+let cancelledRequests=0;
+let idleSince=new Date().toISOString();
+function noteActivity(){
+  if(activeRequests.size||cancelledRequests||localPending.size||sessions.size||openingSessions.size)idleSince=null;
+  else idleSince??=new Date().toISOString();
+}
 const controlEpoch=randomUUID();let controlNo=0;
 function assertOpening(binding){if(binding.openingState?.cancelled)throw Object.assign(new Error('Session open was cancelled; no late session was accepted'),{code:'OPEN_CANCELLED'});}
 function duplexControl(binding,action,more,lane='control'){
@@ -63,8 +70,9 @@ function duplexControl(binding,action,more,lane='control'){
   if(localPending.size>=256)return Promise.reject(Object.assign(new Error('Too many local operations are pending; no operation was submitted'),{code:'LOCAL_CAPACITY'}));
   const controlId=randomUUID();
   return new Promise((resolve,reject)=>{
-    const timer=setTimeout(()=>{localPending.delete(controlId);reject(new Error('Local operation timed out; outcome unknown, no retry was sent'));},110000);
+    const timer=setTimeout(()=>{localPending.delete(controlId);noteActivity();reject(new Error('Local operation timed out; outcome unknown, no retry was sent'));},110000);
     localPending.set(controlId,{resolve,reject,timer});
+    noteActivity();
     send({controlId,controlNo:++controlNo,controlEpoch,sessionId:binding.sessionId,lane,request:{action,...more}});
   });
 }
@@ -256,7 +264,7 @@ const openingSessions=new Map(),closingSessions=new Map();
 async function releaseOpening(sessionId,opening){
   if(opening.releasing)return opening.releasing;
   opening.releasing=Promise.resolve().then(async()=>{
-    try{if(opening.session)await opening.session.close();opening.lease?.close();openingSessions.delete(sessionId);send({sessionId,closed:true});}
+    try{if(opening.session)await opening.session.close();opening.lease?.close();openingSessions.delete(sessionId);noteActivity();send({sessionId,closed:true});}
     catch(error){opening.closeError=error.message;send({sessionId,closeError:error.message});throw error;}
     finally{opening.releasing=null;}
   });return opening.releasing;
@@ -338,13 +346,13 @@ async function request(method, params, signal) {
         }
       }catch(error){return fail('Native branch was created, but bridge inheritance failed for '+s.nativeWriterRef?.nativeSessionId+': '+error.message);}
     }
-    await opening.lease.send({kind:'ready'});
     binding.permissionMode=s.initialState?.effectivePermissionModeId??input.permissionModeId??environment.defaultMode??'default';
     await localControl(binding,'permission',{mode:binding.permissionMode});
     binding.startContext=await localControl(binding,'lifecycle',{event:'SessionStart',payload:{source:input.kind==='fork'?'fork':input.kind==='resume'?'resume':'startup'}});
     if(input.kind==='resume'&&!knownSession){const history=await s.readSnapshot();if(!history.ok)return history;}
     await claimNativeSession(s.nativeWriterRef,binding);
     await loadNoticeState(s.nativeWriterRef,binding);
+    await opening.lease.send({kind:'ready'});
     assertOpening(binding);
     sessions.set(sessionId, s);
     bindings.set(sessionId,binding);
@@ -466,26 +474,32 @@ async function request(method, params, signal) {
     default: throw new Error('Unsupported bridge operation');
   }
 }
-const activeRequests=new Map();
 readJsonLines(process.stdin,frame=>{
+  if(typeof frame.relayStatusRequest==='string'&&Object.keys(frame).length===1){
+    noteActivity();
+    send({relayStatusReply:frame.relayStatusRequest,sessions:sessions.size+openingSessions.size,
+      activeRequests:activeRequests.size+cancelledRequests+localPending.size,idleSince});
+    return;
+  }
   if(frame.cancelRequest!==undefined){
     const active=activeRequests.get(frame.cancelRequest);
     if(active){
-      activeRequests.delete(frame.cancelRequest);
+      activeRequests.delete(frame.cancelRequest);cancelledRequests++;
       active.abandoned=true;
       active.controller?.abort();
     }
     return;
   }
-  if(frame.controlId){send({controlAck:frame.controlId});const pending=localPending.get(frame.controlId);if(!pending)return;localPending.delete(frame.controlId);clearTimeout(pending.timer);if(frame.error)pending.reject(new Error(frame.error));else pending.resolve(frame.value);return;}
+  if(frame.controlId){send({controlAck:frame.controlId});const pending=localPending.get(frame.controlId);if(!pending)return;localPending.delete(frame.controlId);noteActivity();clearTimeout(pending.timer);if(frame.error)pending.reject(new Error(frame.error));else pending.resolve(frame.value);return;}
   const active={abandoned:false,controller:['inspect','snapshot'].includes(frame.method)?new AbortController():null};
   activeRequests.set(frame.id,active);
+  noteActivity();
   // The relay owns the terminal cancellation reply. Writes keep running, but
   // a caller that gave up no longer needs their potentially large result.
   void request(frame.method,frame.params,active.controller?.signal).then(
     value=>{if(!active.abandoned)send({id:frame.id,value});},
     error=>{if(!active.abandoned)send({id:frame.id,error:{code:error.code??'REMOTE_OPERATION_FAILED',message:String(error.message),delivery:error.delivery??'unknown'}});}
-  ).finally(()=>activeRequests.delete(frame.id));
+  ).finally(()=>{if(active.abandoned)cancelledRequests--;else activeRequests.delete(frame.id);noteActivity();});
 },{onError:error=>{process.stderr.write(error.code+'\n');void closeStream(2);},onEnd:()=>void closeStream(0)});
 async function closeStream(code){
   if(streamClosing)return;streamClosing=true;

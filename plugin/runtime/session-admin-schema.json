@@ -2,12 +2,19 @@
   "apiVersion": 1,
   "request": {"apiVersion":"integer","method":"string","params":"object"},
   "item": {"id":"uuid","revision":"revision"},
+  "storageItem": {"id":"storageId","revision":"revision"},
   "maxItems": 200,
   "methods": {
     "info": {},
     "sessions.list": {"scope":"scope","project?":"project"},
     "sessions.archive": {"items":"items","confirmBound?":"boolean"},
     "sessions.restore": {"items":"items"},
-    "sessions.delete": {"items":"items"}
+    "sessions.delete": {"items":"items"},
+    "bridge.status": {},
+    "storage.plan": {},
+    "storage.clean": {"items":"storageItems"},
+    "relays.list": {},
+    "claude.status": {},
+    "claude.update": {}
   }
 }

@@ -197,6 +197,11 @@ def remove_tree(path, expected, *, partial=False):
     found = contents(rows)
     if (not partial and found != expected) or any(expected.get(name) != row for name, row in found.items()):
         raise SessionError('ARCHIVE_CHECKSUM_MISMATCH')
+    remove_snapshot(path, rows)
+
+
+def remove_snapshot(path, rows):
+    """Remove only the entries captured in a revalidated inventory."""
     for name, row in reversed(list(rows.items())):
         file = path / name
         with directory(file.parent) as parent:

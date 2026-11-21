@@ -46,23 +46,45 @@ if(process.argv[2]!=='--locked-serve'){
   delete process.env.CLAUDE_VPS_RELAY_LOCK_FD;
   await fs.unlink(socketPath).catch(error=>{if(error.code!=='ENOENT')throw error;});
   const epoch=randomUUID(),writers=new WeakMap(),sockets=new Set();
+  const startedAt=new Date().toISOString(),probes=new Map();
+  const bridgeVersion=await fs.readFile(path.join(here,'bridge-manifest.json'),'utf8').then(value=>JSON.parse(value).version).catch(()=>null);
+  const offlineExpiryMs=15*60*1000;
   let client=null,channel,offlineSince=Date.now(),stopping=false;
   const worker=spawn(process.execPath,[path.join(here,'remote-server.mjs')],{stdio:['pipe','pipe','pipe']});
   let stderrTail='';worker.stderr.on('data',chunk=>{stderrTail=(stderrTail+chunk.toString()).slice(-8192);});
   const workerWriter=new JsonWriter(worker.stdin,{onError:()=>void stop()});
   const write=(s,value)=>{if(s&&!s.destroyed)try{writers.get(s).send(value);}catch{s.destroy();}};
-  const workerReader=readJsonLines(worker.stdout,value=>channel.output(value),{onError:()=>void stop()});
+  const workerReader=readJsonLines(worker.stdout,value=>{
+    if(value.relayStatusReply){
+      const probe=probes.get(value.relayStatusReply);
+      if(probe){
+        const {socket,writer}=probe;
+        write(socket,{status:{startedAt,bridgeVersion,sessions:value.sessions,activeRequests:value.activeRequests,
+          idleSince:value.idleSince,expiresAt:offlineSince===null?null:new Date(offlineSince+offlineExpiryMs).toISOString()}});
+        writer.end();
+      }
+      return;
+    }
+    channel.output(value);
+  },{onError:()=>void stop()});
   worker.stdin.on('error',()=>void stop());worker.on('error',()=>void stop());
   worker.on('exit',code=>{if(code&&!stopping)process.stderr.write('Remote worker exited ('+code+'). '+stderrTail+'\n');stderrTail='';void stop();});
   const server=net.createServer(socket=>{
     if(sockets.size>=8){socket.destroy();return;}
-    let attached=false;socket.on('error',()=>{});sockets.add(socket);
+    let attached=false,probeId;socket.on('error',()=>{});sockets.add(socket);
     const writer=new JsonWriter(socket,{onError:()=>socket.destroy()});writers.set(socket,writer);
     socket.setTimeout(15000,()=>socket.destroy());
     write(socket,{hello:{epoch,pid:process.pid,protocol:BRIDGE_PROTOCOL}});
     function refuse(code,fatal){write(socket,{code,fatal});writer.end();}
     const reader=readJsonLines(socket,frame=>{
+      if(probeId)return;
       if(!attached){
+        if(frame.admin==='status'&&Object.keys(frame).length===1){
+          probeId=randomUUID();probes.set(probeId,{socket,writer});
+          socket.setTimeout(1500,()=>socket.destroy());
+          try{workerWriter.send({relayStatusRequest:probeId});}catch{socket.destroy();}
+          return;
+        }
         try{channel=negotiateRelay(frame,id,epoch,channel,value=>workerWriter.send(value));}
         catch(e){refuse(e.code,e.message);return;}
         if(client&&client!==socket)client.destroy();
@@ -86,10 +108,10 @@ if(process.argv[2]!=='--locked-serve'){
         void stop();
       }
     },{onError:()=>socket.destroy()});
-    socket.on('close',()=>{reader.dispose();writer.dispose();sockets.delete(socket);if(client===socket){channel?.out.detach();client=null;offlineSince=Date.now();}});
+    socket.on('close',()=>{if(probeId)probes.delete(probeId);reader.dispose();writer.dispose();sockets.delete(socket);if(client===socket){channel?.out.detach();client=null;offlineSince=Date.now();}});
   });
   async function stop(){if(stopping)return;stopping=true;clearInterval(idle);for(const socket of sockets){writers.get(socket)?.dispose();socket.destroy();}server.close();workerReader.dispose();workerWriter.end();const timer=setTimeout(()=>worker.kill(),5000);timer.unref();await fs.unlink(socketPath).catch(()=>{});setTimeout(()=>process.exit(0),5500).unref();}
-  const idle=setInterval(()=>{if(offlineSince&&Date.now()-offlineSince>15*60*1000)void stop();},30000);idle.unref();
+  const idle=setInterval(()=>{if(offlineSince&&Date.now()-offlineSince>offlineExpiryMs)void stop();},30000);idle.unref();
   process.on('SIGTERM',()=>void stop());process.on('SIGINT',()=>void stop());
   server.on('error',()=>void stop());await new Promise(resolve=>server.listen(socketPath,resolve));await fs.chmod(socketPath,0o600);
 }
