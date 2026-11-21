@@ -20,8 +20,19 @@ export class SshTransport{
     this.pendingBytes=0;this.replyBytes=0;this.requestNo=0;this.cursor=0;this.closed=false;this.ready=false;
   }
   state(state,extra={}){
+    if(this.observedState!==state){this.observedState=state;this.stateSince=new Date().toISOString();}
+    if(state!=='connected')this.stopHeartbeat();
     this.onState?.({state,route:this.routes?.current.name,routeType:this.routes?.current.proxy?.type??'direct',lastSwitchReason:this.routes?.lastSwitchReason,lastSwitchDetail:this.routes?.lastSwitchDetail,lastSwitchAt:this.routes?.lastSwitchAt,
-      ...(state==='connected'?{ingress:this.ingress}:{}),...extra});
+      since:this.stateSince,lastSwitchFrom:this.routes?.lastSwitchFrom,lastSwitchTo:this.routes?.lastSwitchTo,
+      ...(state==='connected'?{ingress:this.ingress,relayId:this.id,relayEpoch:this.epoch}:{}),...extra});
+  }
+  stopHeartbeat(){clearInterval(this.heartbeat);this.heartbeat=null;}
+  startHeartbeat(){
+    this.stopHeartbeat();
+    this.heartbeat=setInterval(()=>{
+      if(this.ready&&!this.closed&&!this.proc?.killed)this.state('connected',{heartbeat:true});
+    },30000);
+    this.heartbeat.unref();
   }
   forget(id){
     const p=this.pending.get(id);
@@ -68,6 +79,7 @@ export class SshTransport{
       try{
         await this.start(config);
         this.state('connected',{recovered:!!this.wasDisconnected,ms:Date.now()-started,localPid:this.proc?.pid,remotePid:this.remotePid});
+        this.startHeartbeat();
         this.wasDisconnected=false;return;
       }catch(e){
         error=e;if(e.fatal||this.closed)break;
@@ -108,6 +120,7 @@ export class SshTransport{
     const lost=error=>{
       if(this.proc!==proc)return;
       this.ready=false;this.proc=null;this.out?.detach();writer.dispose();reader?.dispose();this.wasDisconnected=true;
+      this.stopHeartbeat();
       rejectOnce(error);
       this.drained?.();
       if(this.exhaustedProcess===proc){

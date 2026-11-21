@@ -11,6 +11,7 @@ import {createToolBridge} from './tool-bridge.mjs';
 import {contextUpdate} from './context-delta.mjs';
 import {contextNotice,validNoticeState} from './context-notice.mjs';
 import {mergePromptCache} from './prompt-cache.mjs';
+import {openSessionLease} from './session-lease.mjs';
 const exec = promisify(execFile);
 
 import {BRIDGE_PROTOCOL} from './bridge-protocol.mjs';
@@ -21,6 +22,8 @@ const ingress = process.argv[2] === '--ssh-ingress'
   : {kind:'unknown',process:null};
 import {loadClaudeAdapter} from './adapter-loader.mjs';
 const {createHarnessAdapter,dependencyVersion,adapterSha256} = await loadClaudeAdapter();
+const [dependencyMajor,dependencyMinor]=dependencyVersion.split('.').map(Number);
+const nativeImageInput=dependencyMajor>0||(dependencyMajor===0&&dependencyMinor>=22);
 const {version:bridgeVersion}=JSON.parse(await readFile(path.join(bridgeRoot,'bridge-manifest.json'),'utf8'));
 const adapter = await createHarnessAdapter({ environment: { ...process.env, CODEXHOST_CLAUDE_COMMAND: path.join(bridgeRoot,'claude-windows') }, platform: 'linux', managedRemoteHost: false });
 const sessions = new Map();
@@ -30,6 +33,7 @@ const send=value=>{try{output.send(value);}catch{void closeStream(2);}};
 const fail = message => ({ ok: false, error: { code: 'unavailable', message, retryable: false } });
 const limitedCapabilities = c => ({ ...c, history: { fork: c.history?.fork===true, forkAcrossCwd: false, rollbackLastTurn: false }, subagents: { observe: true, readTranscript: false } });
 const bindings = new Map();
+const leaseWorker=await openSessionLease({kind:'worker',pid:process.pid},()=>void closeStream(2));
 let accountInspection=null;
 async function inspectAccount(){
   if(accountInspection)return accountInspection;
@@ -51,8 +55,14 @@ async function cacheUsage(binding,usage){
   }
   return merged.usage;
 }
-const displayedText = new Map();
 const localPending = new Map();
+const activeRequests=new Map();
+let cancelledRequests=0;
+let idleSince=new Date().toISOString();
+function noteActivity(){
+  if(activeRequests.size||cancelledRequests||localPending.size||sessions.size||openingSessions.size)idleSince=null;
+  else idleSince??=new Date().toISOString();
+}
 const controlEpoch=randomUUID();let controlNo=0;
 function assertOpening(binding){if(binding.openingState?.cancelled)throw Object.assign(new Error('Session open was cancelled; no late session was accepted'),{code:'OPEN_CANCELLED'});}
 function duplexControl(binding,action,more,lane='control'){
@@ -60,8 +70,9 @@ function duplexControl(binding,action,more,lane='control'){
   if(localPending.size>=256)return Promise.reject(Object.assign(new Error('Too many local operations are pending; no operation was submitted'),{code:'LOCAL_CAPACITY'}));
   const controlId=randomUUID();
   return new Promise((resolve,reject)=>{
-    const timer=setTimeout(()=>{localPending.delete(controlId);reject(new Error('Local operation timed out; outcome unknown, no retry was sent'));},110000);
+    const timer=setTimeout(()=>{localPending.delete(controlId);noteActivity();reject(new Error('Local operation timed out; outcome unknown, no retry was sent'));},110000);
     localPending.set(controlId,{resolve,reject,timer});
+    noteActivity();
     send({controlId,controlNo:++controlNo,controlEpoch,sessionId:binding.sessionId,lane,request:{action,...more}});
   });
 }
@@ -80,12 +91,13 @@ async function claimNativeSession(ref,binding,verifyOnly=false){
   if(!ref)return;
   const file=path.join(root,'.bridge-sessions',safeId(ref.nativeSessionId)+'.json');
   const saved=await readFile(file,'utf8').then(JSON.parse,e=>e.code==='ENOENT'?null:Promise.reject(e));
-  if(saved && saved.projectId!==binding.projectId)throw new Error('Native Claude session belongs to a different Windows project; open a new chat in this project');
+  if(saved && (saved.projectId!==binding.projectId||saved.remoteCwd!==binding.remoteCwd))throw new Error('Native Claude session belongs to a different Windows project; open a new chat in this project');
   if(saved?.mediaKey)binding.mediaKey=saved.mediaKey;
+  if(saved&&!verifyOnly&&binding.parentThread&&saved.hasBoundThread!==true)await saveJson(file,{...saved,hasBoundThread:true});
   if(!saved&&!verifyOnly){
     await mkdir(path.dirname(file),{recursive:true,mode:0o700});
-    try{await writeFile(file,JSON.stringify({projectId:binding.projectId,localCwd:binding.localCwd,remoteCwd:binding.remoteCwd,mediaKey:binding.mediaKey}),{flag:'wx',mode:0o600});}
-    catch(e){if(e.code!=='EEXIST')throw e;await claimNativeSession(ref,binding,true);}
+    try{await writeFile(file,JSON.stringify({projectId:binding.projectId,localCwd:binding.localCwd,remoteCwd:binding.remoteCwd,mediaKey:binding.mediaKey,hasBoundThread:Boolean(binding.parentThread)}),{flag:'wx',mode:0o600});}
+    catch(e){if(e.code!=='EEXIST')throw e;await claimNativeSession(ref,binding);}
   }
   return Boolean(saved);
 }
@@ -119,6 +131,30 @@ async function localMedia(binding,file){
   const env={...process.env,...binding.toolEnvironment,WINDOWS_PROJECT_CWD:binding.localCwd,WINDOWS_PROJECT_ID:binding.projectId,WINDOWS_BRIDGE_SESSION:binding.sessionId,WINDOWS_MEDIA_SESSION:binding.mediaKey};
   const {stdout}=await exec(workspaceCommand,[JSON.stringify({action:'media',path:file})],{env,timeout:90000,maxBuffer:2*1024*1024});return JSON.parse(stdout);
 }
+async function withTurnMedia(binding,command,context,attachments=[]){
+  if(attachments.length)await localControl(binding,'attachments',{paths:attachments});
+  const images=new Map();
+  for(const file of attachments){
+    let media;
+    try{media=await localMedia(binding,file);}
+    catch(error){
+      send({timing:{phase:'attachment-cache',status:'unavailable',code:error.code??'UNKNOWN'}});
+      media={source:file,files:[],note:'The attachment could not be cached. Its original path remains on Windows; use Windows workspace tools if access is needed.'};
+    }
+    const cached=media.kind==='image'&&media.files?.[0];
+    // The native list uses single lines and a colon-space path separator.
+    if(nativeImageInput&&cached&&path.isAbsolute(cached.path)&&!/[\x00-\x1f\x7f]|: /.test(cached.path)){
+      if(!images.has(cached.sha256))images.set(cached.sha256,cached.path);
+      // The adapter decides which candidates produce blocks, including on steer.
+      media={...media,note:'Use the attached image block when available. Use native Read on the cached path only if its image block is unavailable. Identical SHA-256 values refer to the same image.'};
+    }
+    context.push('Explicitly attached local media:\n'+JSON.stringify(media));
+  }
+  // End the native attachment list before any project rules, hooks or user text.
+  if(images.size)context.unshift('# Files mentioned by the user:\n\n'+
+    [...images.values()].map(file=>'## '+path.basename(file)+': '+file+'\nImage attachment: true').join('\n\n'),'## My request:');
+  return {...command,input:[{type:'text',text:context.join('\n\n')},...command.input]};
+}
 // Native Codex shows a file change where it happens in the turn; the host adds
 // its own summary card at the end. Send the card as soon as the write returns.
 function changeItemId(record){return record.id?'windows-change-'+record.id:'windows-'+createHash('sha256').update(JSON.stringify(record)).digest('hex').slice(0,24);}
@@ -145,10 +181,11 @@ async function presentation(sessionId, output) {
   const binding=bindings.get(sessionId);
   if(!binding || output.kind!=='event')return;
   const event=output.event;
-  const key=sessionId+':'+event.turnId;
   // This is only a duplicate-preview hint, not conversation history. Native
   // history retains the complete answer even when this bounded tail rolls.
-  if(event.type==='item.completed'&&event.snapshot.item.type==='agentMessage')displayedText.set(key,((displayedText.get(key)??'')+'\n'+event.snapshot.item.text).slice(-128*1024));
+  if(event.type==='item.completed'&&event.turnId===binding.activeTurn&&event.snapshot.item.type==='agentMessage'){
+    binding.displayedText=((binding.displayedText??'')+'\n'+event.snapshot.item.text).slice(-128*1024);
+  }
   if(event.type!=='turn.completed')return;
   // Codex marks the last plain agent message of a succeeded turn as the final
   // answer. Trailing bridge text would demote Claude's answer, so only facts
@@ -156,7 +193,7 @@ async function presentation(sessionId, output) {
   if(binding.cancelResult){const cancelled=await binding.cancelResult;delete binding.cancelResult;const stopped=cancelled.ok?cancelled.jobs.filter(j=>j.status==='cancelled').length:0;const text=!cancelled.ok?'本机任务可能仍在运行：'+cancelled.error:stopped?'已停止 '+stopped+' 个本机任务。':'';if(text)emitItems(sessionId,event.turnId,[{item:{type:'agentMessage',itemId:'windows-cancel-'+event.turnId,phase:'commentary',text},outcome:{status:'succeeded'}}]);}
   try{await localControl(binding,'lifecycle',{event:'Stop',payload:{stop_hook_active:false}});}catch(error){emitItems(sessionId,event.turnId,[{item:{type:'agentMessage',itemId:'windows-stop-hook-'+event.turnId,phase:'commentary',text:'本机 Stop hook 出错：'+error.message},outcome:{status:'succeeded'}}]);}
   const file=event.nativeTurnRef?presentationFile(binding,event.nativeTurnRef):null;
-  const extra={source:{localCwd:binding.localCwd,projectId:binding.projectId,sessionId:binding.sessionId,parentThread:binding.parentThread,remoteCwd:binding.remoteCwd,duplexControl:false,turnId:event.turnId},pending:true,items:[],displayedText:displayedText.get(key)??''};displayedText.delete(key);
+  const extra={source:{localCwd:binding.localCwd,projectId:binding.projectId,sessionId:binding.sessionId,parentThread:binding.parentThread,remoteCwd:binding.remoteCwd,duplexControl:false,turnId:event.turnId},pending:true,items:[],displayedText:binding.displayedText??''};delete binding.displayedText;
   try{
     if(file)await saveJson(file,extra);
     extra.items=presentationItems(await localControl(binding,'events',{turnId:event.turnId}),binding,event.turnId,extra.displayedText);
@@ -227,7 +264,7 @@ const openingSessions=new Map(),closingSessions=new Map();
 async function releaseOpening(sessionId,opening){
   if(opening.releasing)return opening.releasing;
   opening.releasing=Promise.resolve().then(async()=>{
-    try{if(opening.session)await opening.session.close();openingSessions.delete(sessionId);send({sessionId,closed:true});}
+    try{if(opening.session)await opening.session.close();opening.lease?.close();openingSessions.delete(sessionId);noteActivity();send({sessionId,closed:true});}
     catch(error){opening.closeError=error.message;send({sessionId,closeError:error.message});throw error;}
     finally{opening.releasing=null;}
   });return opening.releasing;
@@ -253,6 +290,9 @@ async function request(method, params, signal) {
     const opening={cancelled:false,session:null,finished:false};openingSessions.set(sessionId,opening);
     let accepted=false;
     try{
+    leaseWorker.assertHeld();
+    const initialRef=input.kind==='resume'?input.nativeRef:input.kind==='fork'?input.sourceRef:null;
+    opening.lease=await openSessionLease({kind:'open',...(initialRef?{id:safeId(initialRef.nativeSessionId)}:{})},()=>{if(!opening.finished||opening.session)void closeStream(2);});
     const binding={localCwd,sessionId,mediaKey:sessionId,openingState:opening,parentThread,prepareTurn:params.localFeatures?.includes('prepare-turn')===true,duplexControl:params.localControl===true,duplexTools:params.localTools===true,...(params.workspace?.projectId?{projectId:params.workspace.projectId}:{})};
     const verified=await localControl(binding,'bind',{resume:params.rebind===true});
     if(params.workspace && verified.projectId!==params.workspace.projectId)throw new Error('Windows/VPS project identity mismatch');
@@ -272,6 +312,7 @@ async function request(method, params, signal) {
     const environment=await localControl(binding,'environment');
     if(binding.duplexTools)binding.toolEnvironment=toolBridge.register(binding);
     const knownSession=input.kind==='resume'?await claimNativeSession(input.nativeRef,binding,true):false;
+    if(input.kind==='resume'&&!knownSession&&initialRef)await opening.lease.send({kind:'verify',cwd});
     const result = await adapter.open({ ...input, ...(!input.permissionModeId&&environment.defaultMode?{permissionModeId:environment.defaultMode}:{}), cwd, environment: {
       WINDOWS_PROJECT_CWD: verified.cwd,
       WINDOWS_PROJECT_ID: verified.projectId,
@@ -284,6 +325,7 @@ async function request(method, params, signal) {
     } });
     if (!result.ok)return result;
     const s = opening.session = result.value;
+    await opening.lease.send({kind:'writer',id:s.nativeWriterRef? safeId(s.nativeWriterRef.nativeSessionId):undefined});
     assertOpening(binding);
     if(s.nativeWriterRef){
       binding.cacheFile=path.join(root,'.bridge-cache',safeId(s.nativeWriterRef.nativeSessionId)+'.json');
@@ -310,14 +352,17 @@ async function request(method, params, signal) {
     if(input.kind==='resume'&&!knownSession){const history=await s.readSnapshot();if(!history.ok)return history;}
     await claimNativeSession(s.nativeWriterRef,binding);
     await loadNoticeState(s.nativeWriterRef,binding);
+    await opening.lease.send({kind:'ready'});
     assertOpening(binding);
     sessions.set(sessionId, s);
     bindings.set(sessionId,binding);
     accepted=true;
     void (async () => {
       try { for await (let output of s.outputs) {
+        if(binding.nativeClosed)break;
+        binding.processingOutput=(async()=>{
         if(output.kind==='event'){
-          if(output.event.type==='turn.started')binding.activeTurn=output.event.turnId;
+          if(output.event.type==='turn.started'){binding.activeTurn=output.event.turnId;delete binding.displayedText;}
           if(output.event.type==='item.completed'&&output.event.snapshot.item.type==='contextCompaction')binding.contextState=null;
         }
         if(output.kind==='event'&&output.event.type==='session.usage.changed')output={...output,event:{...output.event,usage:await cacheUsage(binding,output.event.usage)}};
@@ -328,6 +373,8 @@ async function request(method, params, signal) {
           const notice=binding.contextNotice;delete binding.contextNotice;
           await acceptNotice(binding,notice);emitItems(sessionId,output.event.turnId,notice.items);
         }
+        })();
+        await binding.processingOutput;
       } }
       catch (error) { send({ sessionId, output: { kind: 'event', event: { type: 'session.faulted', error: fail(error.message).error } } }); }
       finally { send({ sessionId, ended: true }); }
@@ -351,6 +398,7 @@ async function request(method, params, signal) {
   // A lost SSH transport destroys its handles. Closing an already released
   // handle must remain idempotent so Host can resume the durable native chat.
   if (!s) { if(method==='close')return {closed:true};throw Object.assign(new Error('Unknown session handle'),{delivery:'not-sent'}); }
+  if(method!=='close')bindings.get(params.sessionId)?.openingState.lease.assertHeld();
   switch (method) {
     case 'background-status': return {busy:typeof s.hasBackgroundWork!=='function'||!!s.hasBackgroundWork()||!!bindings.get(params.sessionId)?.activeTurn};
     case 'commands-list': {
@@ -374,12 +422,11 @@ async function request(method, params, signal) {
         if(capabilities.steer!==true)return reject('远端 Claude 当前未确认可接收运行中追加指令。');
         const prompt=command.input.filter(i=>i.type==='text').map(i=>i.text).join('\n');
         const {environment,hooks}=await localControl(binding,'prepare-steer',{turnId:command.turnId,prompt});
-        if(params.attachments?.length){await localControl(binding,'attachments',{paths:params.attachments});}
-        const media=[];for(const file of params.attachments??[])media.push('Explicitly attached local media:\n'+JSON.stringify(await localMedia(binding,file)));
+        const context=['Current workspace permission mode: '+binding.permissionMode,environment.text,...hooks.map(h=>h.hookSpecificOutput?.additionalContext??h.additionalContext??'')].filter(Boolean);
+        command=await withTurnMedia(binding,command,context,params.attachments);
         if(binding.activeTurn!==command.turnId)return reject('准备追加指令时原轮次已结束；未提交，请确认后发送新消息。');
-        const context=[environment.text,'Current workspace permission mode: '+binding.permissionMode,...hooks.map(h=>h.hookSpecificOutput?.additionalContext??h.additionalContext??''),...media].filter(Boolean).join('\n\n');
         // Native adapter performs the final active-turn/race check; never retry as turn.start.
-        return await executeNative({...command,input:[{type:'text',text:context},...command.input]});
+        return await executeNative(command);
       }
       if(command.type==='turn.start'){
         const prompt=command.input.filter(i=>i.type==='text').map(i=>i.text).join('\n');
@@ -388,13 +435,12 @@ async function request(method, params, signal) {
         else{await localControl(binding,'turn',{turnId:command.turnId});environment=await localControl(binding,'environment');hooks=await localControl(binding,'lifecycle',{event:'UserPromptSubmit',payload:{prompt}});}
         const update=contextUpdate(binding.contextState,environment);binding.pendingContext=update.state;
         send({timing:{phase:'context-injection',mode:update.mode,bytes:Buffer.byteLength(update.text),fullBytes:Buffer.byteLength(environment.text)}});
-        const context=[update.text,'Current workspace permission mode: '+binding.permissionMode,...[...(binding.startContext??[]),...hooks].map(h=>h.hookSpecificOutput?.additionalContext??h.additionalContext??'')];binding.startContext=[];
+        const context=['Current workspace permission mode: '+binding.permissionMode,update.text,...[...(binding.startContext??[]),...hooks].map(h=>h.hookSpecificOutput?.additionalContext??h.additionalContext??'')];binding.startContext=[];
         const slash=prompt.match(/^\s*\/([\w-]+)(?:\s+([\s\S]*))?$/);
         if(slash){const item=environment.capabilities.find(c=>['skill','command'].includes(c.kind)&&c.name===slash[1]);if(item){const value=await localControl(binding,'capability-context',{id:item.id});context.push('User explicitly invoked '+item.id+':\n'+value.content.replaceAll('$ARGUMENTS',slash[2]??''));command={...command,input:[{type:'text',text:'Execute the explicitly invoked local capability '+item.id+'. Arguments: '+(slash[2]??'')}]};}}
         const pending=(environment.jobs??[]).filter(j=>['starting','queued','running','unresponsive','interrupted'].includes(j.status));
         if(pending.length)context.push('Existing local tasks; query these IDs, never resubmit uncertain work:\n'+JSON.stringify(pending.map(({requestId,status,cwd,startedAt})=>({requestId,status,cwd,startedAt}))));
-        if(params.attachments?.length){await localControl(binding,'attachments',{paths:params.attachments});for(const file of params.attachments){const media=await localMedia(binding,file);context.push('Explicitly attached local media (cached images/PDFs use native Read; local video remains a Windows file):\n'+JSON.stringify(media));}}
-        command={...command,input:[{type:'text',text:context.join('\n\n')},...command.input]};
+        command=await withTurnMedia(binding,command,context,params.attachments);
         const notice=contextNotice(binding.noticeState,environment);
         binding.contextNotice={...notice,turnId:command.turnId,items:notice.text?[{item:{type:'agentMessage',itemId:'windows-context-'+command.turnId,phase:'commentary',text:notice.text},outcome:{status:'succeeded'}}]:[]};
       }
@@ -422,32 +468,38 @@ async function request(method, params, signal) {
     case 'capabilities': return limitedCapabilities(await (s.readCapabilities?.()??s.capabilities));
     case 'usage': await s.refreshUsage?.(); return null;
     case 'close': {
-      const closing=Promise.resolve().then(async()=>{let nativeClosed=false;try{await s.close();nativeClosed=true;await localControl(bindings.get(params.sessionId),'lifecycle',{event:'SessionEnd',payload:{reason:'closed'}});return {closed:true};}catch(error){if(!nativeClosed)send({sessionId:params.sessionId,closeError:error.message});throw error;}finally{closingSessions.delete(params.sessionId);if(nativeClosed){toolBridge.unregister(params.sessionId);sessions.delete(params.sessionId);bindings.delete(params.sessionId);send({sessionId:params.sessionId,closed:true});}}});
+      const closing=Promise.resolve().then(async()=>{const binding=bindings.get(params.sessionId);try{await s.close();binding.nativeClosed=true;await binding.processingOutput?.catch(()=>{});await localControl(binding,'lifecycle',{event:'SessionEnd',payload:{reason:'closed'}});return {closed:true};}catch(error){if(!binding.nativeClosed)send({sessionId:params.sessionId,closeError:error.message});throw error;}finally{closingSessions.delete(params.sessionId);if(binding.nativeClosed){binding.openingState.lease.close();toolBridge.unregister(params.sessionId);sessions.delete(params.sessionId);bindings.delete(params.sessionId);send({sessionId:params.sessionId,closed:true});}}});
       closingSessions.set(params.sessionId,closing);return closing;
     }
     default: throw new Error('Unsupported bridge operation');
   }
 }
-const activeRequests=new Map();
 readJsonLines(process.stdin,frame=>{
+  if(typeof frame.relayStatusRequest==='string'&&Object.keys(frame).length===1){
+    noteActivity();
+    send({relayStatusReply:frame.relayStatusRequest,sessions:sessions.size+openingSessions.size,
+      activeRequests:activeRequests.size+cancelledRequests+localPending.size,idleSince});
+    return;
+  }
   if(frame.cancelRequest!==undefined){
     const active=activeRequests.get(frame.cancelRequest);
     if(active){
-      activeRequests.delete(frame.cancelRequest);
+      activeRequests.delete(frame.cancelRequest);cancelledRequests++;
       active.abandoned=true;
       active.controller?.abort();
     }
     return;
   }
-  if(frame.controlId){send({controlAck:frame.controlId});const pending=localPending.get(frame.controlId);if(!pending)return;localPending.delete(frame.controlId);clearTimeout(pending.timer);if(frame.error)pending.reject(new Error(frame.error));else pending.resolve(frame.value);return;}
+  if(frame.controlId){send({controlAck:frame.controlId});const pending=localPending.get(frame.controlId);if(!pending)return;localPending.delete(frame.controlId);noteActivity();clearTimeout(pending.timer);if(frame.error)pending.reject(new Error(frame.error));else pending.resolve(frame.value);return;}
   const active={abandoned:false,controller:['inspect','snapshot'].includes(frame.method)?new AbortController():null};
   activeRequests.set(frame.id,active);
+  noteActivity();
   // The relay owns the terminal cancellation reply. Writes keep running, but
   // a caller that gave up no longer needs their potentially large result.
   void request(frame.method,frame.params,active.controller?.signal).then(
     value=>{if(!active.abandoned)send({id:frame.id,value});},
     error=>{if(!active.abandoned)send({id:frame.id,error:{code:error.code??'REMOTE_OPERATION_FAILED',message:String(error.message),delivery:error.delivery??'unknown'}});}
-  ).finally(()=>activeRequests.delete(frame.id));
+  ).finally(()=>{if(active.abandoned)cancelledRequests--;else activeRequests.delete(frame.id);noteActivity();});
 },{onError:error=>{process.stderr.write(error.code+'\n');void closeStream(2);},onEnd:()=>void closeStream(0)});
 async function closeStream(code){
   if(streamClosing)return;streamClosing=true;

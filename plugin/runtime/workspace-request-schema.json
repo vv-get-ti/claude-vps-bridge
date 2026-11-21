@@ -11,7 +11,7 @@
     "write":{"fields":{"path":"string","content":"string","expectedHash":"string","requestId":"string"},"required":["path","content","expectedHash"]},
     "edit":{"fields":{"path":"string","oldText":"string","newText":"string","expectedHash":"string","requestId":"string"},"required":["path","oldText","newText","expectedHash"]},
     "run":{"fields":{"script":"string","executable":"string","args":"string[]","requestId":"string","workingDirectory":"string","waitMs":"integer","artifacts":"string[]"},"required":["requestId"],"anyRequired":[["script"],["executable","args"]]},
-    "job":{"fields":{"requestId":"string","operation":{"type":"string","enum":["status","cancel","output"]},"waitMs":"integer","stream":{"type":"string","enum":["stdout","stderr"]},"offset":"integer","limit":"integer","segment":"integer","segmentId":"string","encoding":{"type":"string","enum":["utf-8","base64"]}},"required":["requestId"]},
+    "job":{"fields":{"requestId":"string","operation":{"type":"string","enum":["status","cancel","output"]},"forceReleaseWriter":{"type":"boolean","requires":{"operation":"cancel"}},"waitMs":"integer","stream":{"type":"string","enum":["stdout","stderr"]},"offset":"integer","limit":"integer","segment":"integer","segmentId":"string","encoding":{"type":"string","enum":["utf-8","base64"]}},"required":["requestId"]},
     "jobs":{"fields":{}},
     "artifact":{"fields":{"path":"string"},"required":["path"]},
     "media":{"fields":{"path":"string"},"required":["path"]},

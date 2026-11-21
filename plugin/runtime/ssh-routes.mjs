@@ -84,7 +84,9 @@ export class SshRoutes{
   get length(){return this.routes.length;}
   advance(reason,detail=null){
     if(this.length===1)return false;
+    this.lastSwitchFrom=this.current.name;
     this.index=(this.index+1)%this.length;
+    this.lastSwitchTo=this.current.name;
     this.lastSwitchReason=reasons.has(reason)?reason:'connection-failed';
     this.lastSwitchDetail=failureDetails.has(detail)?detail:null;this.lastSwitchAt=new Date().toISOString();
     return true;
@@ -113,7 +115,9 @@ export class SshRoutes{
   }
 }
 
-const validTime=value=>typeof value==='string'&&Number.isFinite(Date.parse(value))?new Date(Date.parse(value)).toISOString():null;
+export const validTime=value=>typeof value==='string'&&Number.isFinite(Date.parse(value))?new Date(Date.parse(value)).toISOString():null;
+const routeLabel=value=>typeof value==='string'&&label.test(value)?value:null;
+export const relayIdentity=value=>typeof value==='string'&&/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/.test(value)?value:null;
 const states=new Set(['connecting','reconnecting','connected','unavailable','closed']);
 const routeTypes=new Set(['direct','cloudflared','socks5']);
 function safeIngress(value){
@@ -122,16 +126,28 @@ function safeIngress(value){
   return {kind,process};
 }
 let pendingObservation=Promise.resolve();
+const recentObservations=new Map();
 export function recordRouteState(directory,state){
   if(typeof state.route!=='string'||!label.test(state.route)||!states.has(state.state))return Promise.resolve();
-  const row={route:state.route,routeType:routeTypes.has(state.routeType)?state.routeType:null,state:state.state,ingress:safeIngress(state.ingress),lastSwitchReason:reasons.has(state.lastSwitchReason)?state.lastSwitchReason:null,lastSwitchDetail:failureDetails.has(state.lastSwitchDetail)?state.lastSwitchDetail:null,lastSwitchAt:validTime(state.lastSwitchAt),observedAt:new Date().toISOString(),pid:process.pid};
+  const row={route:state.route,routeType:routeTypes.has(state.routeType)?state.routeType:null,state:state.state,ingress:safeIngress(state.ingress),lastSwitchReason:reasons.has(state.lastSwitchReason)?state.lastSwitchReason:null,lastSwitchDetail:failureDetails.has(state.lastSwitchDetail)?state.lastSwitchDetail:null,lastSwitchAt:validTime(state.lastSwitchAt),pid:process.pid,
+    since:validTime(state.since),lastSwitchFrom:routeLabel(state.lastSwitchFrom),lastSwitchTo:routeLabel(state.lastSwitchTo),
+    relayId:relayIdentity(state.relayId),relayEpoch:relayIdentity(state.relayEpoch)};
   const file=path.join(directory,'ssh-route.json');
+  const signature=JSON.stringify(row),now=Date.now(),previous=recentObservations.get(file);
+  if(previous?.signature===signature&&now-previous.now<5000)return pendingObservation;
+  const observation={signature,now};
+  recentObservations.set(file,observation);
+  row.observedAt=new Date(now).toISOString();
   // Preserve callback order even when mkdir/rename of an earlier state is slow.
   pendingObservation=pendingObservation.catch(()=>{}).then(async()=>{
     await fs.mkdir(directory,{recursive:true});
     const temp=file+'.'+randomUUID()+'.tmp';
     await fs.writeFile(temp,JSON.stringify(row),{mode:0o600});
-    await replaceFile(temp,file);
+    try{await replaceFile(temp,file);}
+    finally{await fs.rm(temp,{force:true});}
+  }).catch(error=>{
+    if(recentObservations.get(file)===observation)recentObservations.delete(file);
+    throw error;
   });
   return pendingObservation;
 }
@@ -154,5 +170,6 @@ export function routeObservation(config,row,isAlive){
       else if(ingress.process)consistency=ingress.process==='cloudflared'?'match':'mismatch';
     }
   }
-  return {route:row.route,routeType:type,state:isAlive(row.pid)===false?'stopped':row.state,ingress,consistency,lastSwitchReason:reasons.has(row.lastSwitchReason)?row.lastSwitchReason:null,lastSwitchDetail:failureDetails.has(row.lastSwitchDetail)?row.lastSwitchDetail:null,lastSwitchAt:validTime(row.lastSwitchAt),observedAt:new Date(observed).toISOString()};
+  return {route:row.route,routeType:type,state:isAlive(row.pid)===false?'stopped':row.state,ingress,consistency,lastSwitchReason:reasons.has(row.lastSwitchReason)?row.lastSwitchReason:null,lastSwitchDetail:failureDetails.has(row.lastSwitchDetail)?row.lastSwitchDetail:null,lastSwitchAt:validTime(row.lastSwitchAt),observedAt:new Date(observed).toISOString(),
+    lastSwitchFrom:routeLabel(row.lastSwitchFrom),lastSwitchTo:routeLabel(row.lastSwitchTo)};
 }

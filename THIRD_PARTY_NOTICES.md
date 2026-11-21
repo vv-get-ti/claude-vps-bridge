@@ -9,6 +9,7 @@
 | yaml 2.8.1 | 本机规则与能力元数据 | ISC |
 | @playwright/mcp 0.0.80（可选） | 本机浏览器 MCP | Apache-2.0 |
 | Playwright / playwright-core（可选传递依赖） | 浏览器执行 | Apache-2.0 |
+| Lucide 图标（内嵌少量 SVG 路径） | 可选 Desktop 扩展的界面图标，与 CodexHost 设置页一致 | ISC；[lucide.dev](https://lucide.dev/license) |
 
 第三方 npm 包由使用者安装时按锁文件下载，不以 `node_modules` 形式提交。精确版本、完整性哈希与包来源见 `plugin/runtime/package-lock.json`。依赖自身的许可文本应随相应软件包保留。
 

@@ -13,7 +13,7 @@ import { brokerRequest, ensureBroker } from './job-broker.mjs';
 import {deliveryOutcome} from './delivery-outcome.mjs';
 import {validateRequest} from './request-schema.mjs';
 import {executeAgentCli} from './agent-cli.mjs';
-import {acquireWriter,withWriter,withWriters,writerStatus} from './task-coordination.mjs';
+import {acquireWriter,withWriter,withWriters,writerStatus,processPresence,reclaimJobWriter,writerRecovery} from './task-coordination.mjs';
 import {boundedLog} from './bounded-log.mjs';
 import {readJobOutput,jobOutputTail} from './job-output.mjs';
 import {searchWorkspace} from './workspace-search.mjs';
@@ -48,13 +48,15 @@ async function atomic(file, value) {
   try { await next; } finally { if (writeChains.get(file) === next) writeChains.delete(file); }
 }
 function safeId(value) { if (typeof value !== 'string' || !/^[a-zA-Z0-9_-]{1,100}$/.test(value)) fail('INVALID_ID', 'Identifiers may contain only letters, digits, - and _ (1-100 characters)'); return value; }
-export async function projectInfo(cwd) {
+export async function projectInfo(cwd, {readOnly=false}={}) {
   if (!path.win32.isAbsolute(cwd)) fail('INVALID_PROJECT', 'Select an absolute Windows project directory');
   const real = await fs.realpath(cwd).catch(() => fail('PROJECT_MISSING', 'The selected Windows project does not exist'));
   if (!(await fs.stat(real)).isDirectory()) fail('INVALID_PROJECT', 'The selected Windows project is not a directory');
-  await fs.mkdir(state, { recursive: true });
   const machineFile = path.join(state, 'machine-id');
-  try { await fs.writeFile(machineFile, randomUUID(), { flag: 'wx' }); } catch (e) { if (e.code !== 'EEXIST') throw e; }
+  if(!readOnly){
+    await fs.mkdir(state, { recursive: true });
+    try { await fs.writeFile(machineFile, randomUUID(), { flag: 'wx' }); } catch (e) { if (e.code !== 'EEXIST') throw e; }
+  }
   const machineId = (await fs.readFile(machineFile, 'utf8')).trim();
   const key = real.replace(/[\\/]+$/, '').toLowerCase();
   const projectId = hash(machineId + '\n' + key);
@@ -174,16 +176,24 @@ async function artifact(info, ctx, file) {
   await record(ctx,info,{kind:'artifact',artifact:value});
   return value;
 }
-async function jobStatus(directory,{includeLogs=true}={}) {
+async function jobStatus(directory,{includeLogs=true,confirmExit=false}={}) {
   const value = await json(path.join(directory,'status.json')).catch(e=>e.code==='ENOENT'?{status:'starting'}:Promise.reject(e));
-  if (['running','queued'].includes(value.status) && value.runnerPid) {
+  const recovery=value.runnerPid&&['running','queued','interrupted'].includes(value.status)?await writerRecovery(directory,value):null;
+  if(recovery){
+    value.status='interrupted';value.error='Local task runner exited; no replay was submitted';value.writerRecovery=recovery;
+  }else if (['running','queued','unresponsive'].includes(value.status) && value.runnerPid) {
     // OpenSSH logons can deny PROCESS_TERMINATE even for signal 0. EPERM is
     // not proof of exit. A runner-owned heartbeat also prevents PID reuse from
     // being mistaken for the original task's continued execution.
     const heartbeat=value.runnerToken?await fs.stat(path.join(directory,'heartbeat-'+safeId(value.runnerToken))).catch(()=>null):null;
-    if(!heartbeat||Date.now()-heartbeat.mtimeMs>10000){
-      try {process.kill(value.runnerPid,0);if(value.runnerToken){value.status='unresponsive';value.error='Local runner heartbeat is stale; execution outcome is unknown. Do not replay the task';}}
-      catch(e){if(e.code==='ESRCH'){value.status='interrupted';value.error='Local task runner exited; no replay was submitted';}else{value.liveness='unconfirmed';if(value.runnerToken){value.status='unresponsive';value.error='Local runner heartbeat is stale and process access is unavailable; execution outcome is unknown';}}}
+    const stale=!heartbeat||Date.now()-heartbeat.mtimeMs>10000;
+    if(stale||confirmExit){
+      const runner=processPresence(value.runnerPid);
+      if(runner==='missing'){value.status='interrupted';value.error='Local task runner exited; no replay was submitted';}
+      else if(stale){
+        if(runner==='unconfirmed')value.liveness='unconfirmed';
+        if(value.runnerToken){value.status='unresponsive';value.error=runner==='alive'?'Local runner heartbeat is stale; execution outcome is unknown. Do not replay the task':'Local runner heartbeat is stale and process access is unavailable; execution outcome is unknown';}
+      }
     }
   }
   const uncertain=['unresponsive','interrupted'].includes(value.status);
@@ -240,17 +250,26 @@ async function runJob(directory){
   const spec=await json(path.join(directory,'request.json'));
   const info=await verifyProject(spec.project.cwd,spec.project.projectId);
   const startedAt=new Date().toISOString();
-  let status={requestId:spec.requestId,status:'running',cwd:info.cwd,runnerPid:process.pid,runnerToken:randomUUID(),startedAt};
+  const statusFile=path.join(directory,'status.json');
+  const scope=await writerScope(state,info.projectId,spec.parentThread);
+  let status={requestId:spec.requestId,status:'running',cwd:info.cwd,runnerPid:process.pid,runnerToken:randomUUID(),writerScope:scope,childLaunch:'not-started',startedAt};
   if (await fs.access(path.join(directory,'cancel')).then(()=>true,()=>false)) {
-    await atomic(path.join(directory,'status.json'), {...status,status:'cancelled',completedAt:new Date().toISOString()}); return;
+    await atomic(statusFile, {...status,status:'cancelled',completedAt:new Date().toISOString()}); return;
   }
   const heartbeat=path.join(directory,'heartbeat-'+status.runnerToken);await fs.writeFile(heartbeat,'');
   const beat=setInterval(()=>{const now=new Date();void fs.utimes(heartbeat,now,now).catch(()=>{});},1000);
-  let queued=false,lease;
-  try{lease=await acquireWriter(state,await writerScope(state,info.projectId,spec.parentThread),{kind:'job',requestId:spec.requestId,waitMs:24*60*60*1000,
-    isCancelled:()=>fs.access(path.join(directory,'cancel')).then(()=>true,()=>false),
-    onWait:async()=>{if(!queued){queued=true;await atomic(path.join(directory,'status.json'),{...status,status:'queued',reason:'Waiting for the current project writer'});}}
-  });}catch(e){clearInterval(beat);if(e.code==='CANCELLED'){await atomic(path.join(directory,'status.json'),{...status,status:'cancelled',completedAt:new Date().toISOString()});return;}throw e;}
+  let lease;
+  try{
+    await atomic(statusFile,{...status,status:'queued',reason:'Waiting for the project writer'});
+    lease=await acquireWriter(state,scope,{kind:'job',requestId:spec.requestId,job:{projectId:info.projectId,runnerToken:status.runnerToken},waitMs:24*60*60*1000,
+      isCancelled:()=>fs.access(path.join(directory,'cancel')).then(()=>true,()=>false),
+    });
+  }catch(e){clearInterval(beat);if(e.code==='CANCELLED'){await atomic(statusFile,{...status,status:'cancelled',completedAt:new Date().toISOString()});return;}throw e;}
+  // Persist the launch boundary before spawn. Normal release also stays behind
+  // this boundary so it cannot race recovery of a pre-launch writer.
+  status.childLaunch='possible';
+  try{await atomic(statusFile,status);}
+  catch(error){clearInterval(beat);throw Object.assign(error,{preserveJobStatus:true});}
   let child,ending,termination,terminationReason,terminationConfirmed=false,terminationError,processFinished=false;
   function terminate(reason){
     if(termination)return termination;terminationReason=reason;
@@ -265,7 +284,7 @@ async function runJob(directory){
   let killPending=false;
   ending=new Promise(resolve=>{child.once('error',e=>resolve({code:-1,error:e.message}));child.once('close',(code,signal)=>{processFinished=true;resolve({code,signal});});});
   status.childPid=child.pid;
-  await atomic(path.join(directory,'status.json'),status);
+  await atomic(statusFile,status);
   const poll=setInterval(async()=>{if(killPending)return;try{await fs.access(path.join(directory,'cancel'));}catch{return;}killPending=true;await terminate('cancel');},150);
   const result=await ending;clearInterval(poll);clearInterval(beat);
   await logDone;await termination;
@@ -274,7 +293,7 @@ async function runJob(directory){
     try { status.artifacts=[];for(const file of spec.artifacts)status.artifacts.push(await artifact(info,spec,file)); }
     catch(e){status.artifactStatus='unavailable';status.artifactError='Command succeeded, but output verification failed: '+e.message;}
   }
-  await atomic(path.join(directory,'status.json'),status);
+  await atomic(statusFile,status);
   }finally{
     clearInterval(beat);
     if(child&&!processFinished){await terminate('runner-failure');if(terminationConfirmed){let timer;try{await Promise.race([ending,new Promise(resolve=>timer=setTimeout(resolve,10000))]);}finally{clearTimeout(timer);}}}
@@ -323,9 +342,21 @@ export async function handle(request){
       const directory=path.join(state,'jobs',info.projectId,safeId(request.requestId));
       await fs.access(path.join(directory,'request.json')).catch(()=>fail('JOB_NOT_FOUND','No task with this request ID exists in this project'));
       if(request.operation==='output'){const status=await jobStatus(directory,{includeLogs:false});data=await readJobOutput(directory,{...request,complete:['succeeded','failed','cancelled','interrupted'].includes(status.status)});break;}
-      if(request.operation==='cancel')await fs.writeFile(path.join(directory,'cancel'),'cancel');
-      const deadline=Date.now()+Math.min(30000,Math.max(0,Number(request.waitMs)||0));
-      do{data=await jobStatus(directory);if(!['running','starting','queued'].includes(data.status)||Date.now()>=deadline)break;await sleep(150);}while(true);
+      const cancelling=request.operation==='cancel',forced=request.forceReleaseWriter===true;
+      if(cancelling&&!forced)await fs.writeFile(path.join(directory,'cancel'),'cancel');
+      const deadline=Date.now()+(forced?0:Math.min(30000,Math.max(0,Number(request.waitMs)||0)));
+      do{data=await jobStatus(directory,{confirmExit:cancelling});if(!['running','starting','queued'].includes(data.status)||Date.now()>=deadline)break;await sleep(150);}while(true);
+      if(forced||cancelling&&['interrupted','unresponsive'].includes(data.status)){
+        let recovery={status:'already-released'};
+        if(!data.writerRecovery){
+          const spec=await json(path.join(directory,'request.json'));
+          const scope=/^[a-f0-9]{64}$/.test(data.writerScope??'')?data.writerScope:await writerScope(state,info.projectId,spec.parentThread);
+          const owner=await writerStatus(state,scope).catch(()=>({status:'owner-unknown'}));
+          recovery=await reclaimJobWriter(state,scope,owner,{projectId:info.projectId,requestId:request.requestId,forced});
+          data=await jobStatus(directory,{confirmExit:true});
+        }
+        data.writerReclaim=data.writerRecovery&&recovery.status!=='released'?{status:'already-released'}:recovery;
+      }
       if(data.status==='succeeded')for(const value of data.artifacts??[])await artifact(info,ctx,value.path);break;
     }
     case 'jobs': data=await projectJobs(info);break;
@@ -452,5 +483,5 @@ function readBatch(request){
 }
 if(process.argv[1]&&path.resolve(process.argv[1])===fileURLToPath(import.meta.url)){
   try{if(process.argv[2]==='--job'){await runJob(process.argv[3]);}else{const internal=process.argv[2]==='--control';const request=JSON.parse(Buffer.from(process.argv[internal?3:2],'base64').toString('utf8'));console.log(JSON.stringify(internal?await control(request):await handle(request)));}}
-  catch(e){if(process.argv[2]==='--job')await atomic(path.join(process.argv[3],'status.json'),{requestId:path.basename(process.argv[3]),status:'failed',error:e.message,completedAt:new Date().toISOString()}).catch(()=>{});console.error(JSON.stringify({bridge:'windows-workspace-v1',ok:false,error:{code:e.code||'EXECUTION_FAILED',message:e.message}}));process.exitCode=1;}
+  catch(e){if(process.argv[2]==='--job'&&!e.preserveJobStatus)await atomic(path.join(process.argv[3],'status.json'),{requestId:path.basename(process.argv[3]),status:'failed',error:e.message,completedAt:new Date().toISOString()}).catch(()=>{});console.error(JSON.stringify({bridge:'windows-workspace-v1',ok:false,error:{code:e.code||'EXECUTION_FAILED',message:e.message}}));process.exitCode=1;}
 }

@@ -18,11 +18,11 @@ export function validateConfig(value){
   return value;
 }
 let cached;
-export function getBridgeConfig(){
-  if(cached)return cached;
-  const candidates=process.env.CLAUDE_VPS_CONFIG?[process.env.CLAUDE_VPS_CONFIG]:[path.join(root,'bridge-config.json'),path.join(root,'bridge-config.local.json')];
-  const file=candidates.find(p=>fs.existsSync(p));
+export function loadBridgeConfig({root:directory=root,installedRoot,configFile=process.env.CLAUDE_VPS_CONFIG}={}){
+  const candidates=configFile?[configFile]:[path.join(directory,'bridge-config.json'),path.join(directory,'bridge-config.local.json'),...(installedRoot?[path.join(installedRoot,'bridge-config.json')]:[])];
+  const file=candidates.find(p=>fs.statSync(p,{throwIfNoEntry:false})?.isFile());
   if(!file)throw new Error('Bridge configuration missing; run the bridge installer configuration step');
-  return cached=validateConfig(JSON.parse(fs.readFileSync(file,'utf8').replace(/^\uFEFF/,'')));
+  return validateConfig(JSON.parse(fs.readFileSync(file,'utf8').replace(/^\uFEFF/,'')));
 }
+export function getBridgeConfig(){return cached??=loadBridgeConfig();}
 export function shellQuote(value){return "'"+String(value).replaceAll("'","'\\''")+"'";}

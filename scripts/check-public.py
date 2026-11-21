@@ -15,8 +15,15 @@ PATTERNS=[
  ('personal-windows-path',re.compile(r'(?i)[A-Z]:[\\/]+Users[\\/]+(?!YOUR_USER\b|example\b|developer\b|Public\b)[^\\/\s"\']+')),
 ]
 
+# Desktop extension marketplace assets are authored with fictional data and
+# reviewed; they are the only images allowed. Real-use screenshots stay out.
+EXTENSION_ASSET=re.compile(r'extension/images/[a-z0-9-]+\.png')
+PNG_SIGNATURE=b'\x89PNG\r\n\x1a\n'
+
 def inspect_file(name,data):
     p=PurePosixPath(name);parts={x.lower() for x in p.parts};base=p.name.lower();issues=[]
+    if EXTENSION_ASSET.fullmatch(name):
+        return [] if data.startswith(PNG_SIGNATURE) and len(data)<=512*1024 else ['extension-asset-must-be-png-within-512k']
     if parts&FORBIDDEN_DIRS or base in PRIVATE_NAMES or base.startswith(('mcp-config.private','installation-','verification-','diagnosis-','backup-')) or p.suffix.lower() in FORBIDDEN_SUFFIXES:
         issues.append('private-or-generated-path')
     if len(data)>2*1024*1024:issues.append('unexpected-large-source-file')

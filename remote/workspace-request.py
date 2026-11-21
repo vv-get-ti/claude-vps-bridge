@@ -28,6 +28,8 @@ def validate(request, internal=False, permission=False):
         name=rule['type'];array=name.endswith('[]');check=types[name[:-2] if array else name]
         if (not isinstance(value,list) or not all(check(item) for item in value)) if array else not check(value):bad(key+' must be '+name+'. Allowed fields: '+allowed)
         if 'enum' in rule and value not in rule['enum']:bad(key+' must be one of '+', '.join(rule['enum']))
+        for field,required in rule.get('requires',{}).items():
+            if request.get(field)!=required:bad(key+' requires '+field+'='+str(required))
         if 'minItems' in rule and len(value)<rule['minItems'] or 'maxItems' in rule and len(value)>rule['maxItems']:bad(key+' has an invalid item count. Use explicit --help for agent help')
     for key in definition.get('required',[]):
         if key not in request:bad('Missing required field '+key+'. Allowed fields: '+allowed)

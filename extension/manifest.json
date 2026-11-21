@@ -1,0 +1,35 @@
+{
+  "manifestVersion": 1,
+  "id": "claude-vps-sessions",
+  "name": { "en": "Claude VPS Sessions", "zh-CN": "Claude VPS 会话管理" },
+  "version": "0.2.1",
+  "description": {
+    "en": "Manage Claude Code sessions and storage on the VPS used by Claude VPS Bridge, and see the connection status in the sidebar.",
+    "zh-CN": "管理 Claude VPS Bridge 所用 VPS 上的 Claude Code 会话与存储，并在侧栏显示连接状态。"
+  },
+  "details": {
+    "en": "Adds a **VPS Sessions** page to Settings and a status dot to Claude VPS chats in the sidebar.\n\n- **Sessions / Archive**: list Claude Code sessions on the VPS with their Windows project, last activity and size. Archive moves a session out of reach of Claude without losing data; restore puts it back. Permanent deletion is only available in the archive.\n- **Storage**: preview and clean up bridge data whose session no longer exists, archive leftovers and old local task logs. Relays on the VPS are listed for reference.\n- **Claude Code**: shows the version installed on the VPS and updates it with the official `claude update`.\n- **Sidebar**: green when connected, amber while reconnecting, red when unavailable; hover for the route and the last switch.\n\nRunning sessions, or sessions whose state cannot be confirmed, are never touched. Requires Claude VPS Bridge 0.16.0 or later; features the installed bridge does not offer are hidden. The extension only talks to the bridge through its management entry `admin.mjs`; the bridge works without it.",
+    "zh-CN": "在设置中增加 **VPS 会话** 页面，并在侧栏的 Claude VPS 聊天上显示连接状态。\n\n- **会话 / 归档**：列出 VPS 上的 Claude Code 会话，显示所属 Windows 项目、最后活动时间和大小。归档会把会话移出 Claude 的可见范围，数据不丢失，可以恢复；只能在归档里永久删除。\n- **存储清理**：预览并清理已没有对应会话的桥接数据、归档残留和过期的本机任务日志；同时列出 VPS 上的 relay 供参考。\n- **Claude Code**：显示 VPS 上安装的版本，可用官方 `claude update` 更新。\n- **侧栏**：已连接为绿色，重连中为琥珀色，不可用为红色；悬停查看线路和最近一次切换。\n\n正在运行或无法确认已停止的会话不会被处理。需要 Claude VPS Bridge 0.16.0 或更新版本；桥接未提供的功能会自动隐藏。扩展只通过桥接的管理入口 `admin.mjs` 工作；不装扩展时桥接照常运行。"
+  },
+  "author": "vv-get-ti",
+  "repository": "https://github.com/vv-get-ti/claude-vps-bridge",
+  "desktopApi": 1,
+  "desktop": { "script": "desktop.js", "style": "desktop.css" },
+  "backend": { "script": "backend.mjs" },
+  "slots": ["sidebar.thread-badge"],
+  "settingsSchema": [
+    {
+      "key": "pluginDir",
+      "type": "string",
+      "label": { "en": "Bridge plugin directory", "zh-CN": "桥接插件目录" },
+      "description": {
+        "en": "Leave empty to use <CodexHost data directory>/plugins/claude-vps.",
+        "zh-CN": "留空时使用 <CodexHost 数据目录>/plugins/claude-vps。"
+      },
+      "placeholder": { "en": "Default location", "zh-CN": "默认位置" }
+    }
+  ],
+  "categories": ["workflow", "tools", "interface"],
+  "icon": "images/icon.png",
+  "screenshots": ["images/sessions.png", "images/confirm.png", "images/storage.png"]
+}

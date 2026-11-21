@@ -20,6 +20,7 @@ export function validateRequest(request,{internal=false,permission=false}={}){
     const array=rule.type.endsWith('[]'),type=array?rule.type.slice(0,-2):rule.type;
     if(array?(!Array.isArray(value)||!value.every(types[type])):!types[type](value))bad(key+' must be '+rule.type+'. Allowed fields: '+allowed);
     if(rule.enum&&!rule.enum.includes(value))bad(key+' must be one of '+rule.enum.join(', '));
+    for(const [field,required] of Object.entries(rule.requires??{}))if(request[field]!==required)bad(key+' requires '+field+'='+required);
     if(rule.minItems!==undefined&&value.length<rule.minItems||rule.maxItems!==undefined&&value.length>rule.maxItems)bad(key+' has an invalid item count. Use explicit --help for agent help');
   }
   for(const key of definition.required??[])if(request[key]===undefined)bad('Missing required field '+key+'. Allowed fields: '+allowed);

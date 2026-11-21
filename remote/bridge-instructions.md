@@ -38,6 +38,7 @@ Bash 只是传输通道。每次只发一条命令，参数是一个用单引号
 - `requestId` 是幂等的。命令启动结果不确定时，先用同一个编号查询；用同一个编号重新提交也安全，不会重复执行。绝不要换新编号重试，也不要重做。
 - 命令执行完不等于成功：要看 `exitCode` 和实际输出。
 - 同一项目的写入和命令共用一把写锁。委派出去的 Agent 会一直占着，直到你读取或等待它的结果。
+- 仅在用户明确同意后，才对原任务使用 `job cancel` 的 `forceReleaseWriter: true`。收到结果后，先向用户报告仍存活的可追溯后代，枚举未确认时如实说明。
 - 给当前项目持有写锁的同一个子线程追加指令，使用 `argv` 中的 `thread send <thread> --message <text> --steer true`，沿用原写入所有权。`--steer true` 与 `--interrupt` 互斥。
 - 读取会话优先用 `--format compact`，内容简短。`delegate start`、`thread send/read/wait` 需要读出任务身份和终态，若指定 `text` 会改用完整 JSON；其他命令的 `text` 输出放在 `text` 字段。CLI 失败会返回错误。
 - 每个 action 仅接受定义中的字段。字段、类型或必填项错误会返回 `INVALID_ARGUMENT` 和允许字段。`agent` 的 CLI 数组字段是 `argv`。
